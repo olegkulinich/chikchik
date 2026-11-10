@@ -271,7 +271,7 @@ class MainWindow(QMainWindow):
         self._exact_timer.setInterval(150)
         self._exact_timer.timeout.connect(self._scrub_rest)
         self._scrub_t: float | None = None
-        self._exact_t: float | None = None
+        self._kf_drag = False               # this drag used keyframe seeks
 
         # T32: undo/redo of trim & crop
         self._history: list[tuple] = []
@@ -645,11 +645,15 @@ class MainWindow(QMainWindow):
             if self._scrub_active:
                 self._scrub_active = False
                 self.video.set_scrub_mode(False)
-            # T18: the resting frame was already sought exactly → don't jump again
-            already = self._exact_t is not None and abs(self._exact_t - t) < self._step(False) / 2
-            self._scrub_t = self._exact_t = None
-            if not already:
-                self.video.seek(t, True)
+            keyframes, self._kf_drag = self._kf_drag, False
+            self._scrub_t = None
+            if keyframes:
+                # T18: the frame found by eye stays — playhead/⌛ follow the picture
+                # (the poll syncs them once the last seek has landed), no exact jump.
+                self._hold_until = 0.0
+                self._follow_picture()
+                return
+            self.video.seek(t, True)
             self._hold_target, self._hold_until = t, time.monotonic() + 0.5
             self._nudge_target, self._nudge_stamp = t, time.monotonic()
             return
@@ -664,15 +668,26 @@ class MainWindow(QMainWindow):
         self._scrub_t = t
         if not moved:          # jitter under a frame: keep the rest timer running
             return
-        self._exact_t = None
         self.video.seek(t, exact)
         if not exact:
-            self._exact_timer.start()     # T18: rest ~150 ms → exact frame before release
+            self._kf_drag = True
+            self._exact_timer.start()     # T18: at rest the playhead moves to the picture
+
+    def _follow_picture(self) -> None:
+        """Playhead and ⌛ jump to the frame mpv shows (keyframe scrub)."""
+        if self.video.seek_busy():
+            QTimer.singleShot(30, self._follow_picture)
+            return
+        position = self.video.time_pos
+        if position is None:
+            return
+        self.timeline.show_position(position)
+        self.time_field.setText(self._fmt(position))
+        self._nudge_target, self._nudge_stamp = position, time.monotonic()
 
     def _scrub_rest(self) -> None:
         if self._scrub_t is not None and self.timeline.is_dragging():
-            self._exact_t = self._scrub_t
-            self.video.seek(self._scrub_t, True)
+            self._follow_picture()
 
     # ============================================================== trim
     def _editable(self) -> bool:
