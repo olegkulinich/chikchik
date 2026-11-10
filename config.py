@@ -48,6 +48,7 @@ HOTKEY_ACTIONS = (
     HotkeyAction("go_end", "Go to End", "End"),              # T41
     HotkeyAction("undo", "Undo", "Ctrl+Z"),                  # T32
     HotkeyAction("redo", "Redo", "Ctrl+Shift+Z"),            # T32
+    HotkeyAction("fullscreen", "Fullscreen", "F"),           # T22
     # Key N = 1/N; 0.75x has no key (menu only).
     HotkeyAction("scale_1", "Scale 1x", "1"),
     HotkeyAction("scale_2", "Scale 0.5x", "2"),
@@ -71,7 +72,6 @@ MENU_SHORTCUTS = {
     "open": ("Open", "Ctrl+O"),
     "export": ("Export", "Ctrl+E"),                # T42: "Export to…" when Save To = Ask
     "export_to": ("Export to…", "Ctrl+Shift+E"),   # T42: always asks where
-    "overwrite": ("Overwrite", "Ctrl+Shift+S"),
     "copy_frame": ("Copy Frame", "Ctrl+C"),   # T19a
     "fit": ("Fit", "Ctrl+0"),                 # T20
     "actual_size": ("Actual Size", "Ctrl+1"), # T20

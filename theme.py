@@ -152,6 +152,7 @@ QPushButton[seg="true"]:disabled {{ color: {DIM}; background: {BUTTON}; }}
 QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: {ACTIVE}; }}   /* T25: the pick stays visible */
 
 QPushButton[keycap="true"] {{ color: {DIM}; padding: 0 8px; }}
+QWidget#Panels[overlay="true"] {{ background: {WINDOW}; }}
 QScrollArea#HotkeysScroll, QScrollArea#HotkeysScroll > QWidget > QWidget {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {BUTTON_HOVER}; border-radius: 3px; min-height: 24px; }}
