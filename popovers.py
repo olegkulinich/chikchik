@@ -190,7 +190,7 @@ class HotkeysPopover(Popover):
         self.config = config
 
         content = QWidget()
-        grid = QGridLayout(content)
+        self._grid = grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(theme.GAP2)
         grid.setVerticalSpacing(self.ROW_SPACING)
@@ -246,15 +246,16 @@ class HotkeysPopover(Popover):
         widest = max(cap.natural_width() for cap in self.caps.values())
         for cap in self.caps.values():
             cap.setFixedWidth(widest)
-        self._content.adjustSize()
-        hint = self._content.sizeHint()
         row_h = max(cap.sizeHint().height() for cap in self.caps.values())
         rows = min(self._rows, self.MAX_ROWS)
         visible = rows * row_h + (rows - 1) * self.ROW_SPACING
         scrolls = self._rows > self.MAX_ROWS
-        # the scrollbar gets its own 16 px gap instead of covering the keys
-        extra = theme.GAP2 if scrolls else 0
-        self.scroll.setFixedSize(hint.width() + extra, min(hint.height(), visible))
+        # keys ↔ scrollbar: the same 16 px as between the columns
+        self._grid.setContentsMargins(0, 0, theme.GAP2 if scrolls else 0, 0)
+        self._content.adjustSize()
+        hint = self._content.sizeHint()
+        bar = self.scroll.verticalScrollBar().sizeHint().width() if scrolls else 0
+        self.scroll.setFixedSize(hint.width() + bar, min(hint.height(), visible))
         self.adjustSize()
 
     def refresh(self) -> None:

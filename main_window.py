@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
             self.crop_fields[key] = field
         bottom.addWidget(FieldGroup(list(self.crop_fields.values())))
         bottom.addStretch(1)
+        bottom.addSpacing(theme.GAP2 - theme.HGAP)   # + the row spacing = Crop ↔ export never closer than 16 px
 
         self.format_button = button(".mp4", tooltip="Output format")
         self.format_button.clicked.connect(self._format_clicked)
@@ -407,8 +408,8 @@ class MainWindow(QMainWindow):
             "hotkeys": lambda: self.hotkeys_popover.popup_over(self.video),
             "settings": self._show_settings,
             "open": self.open_dialog,
-            "export": lambda: self.export(),
-            "export_to": lambda: self.export(ask=True),
+            "export": lambda: self.export(ask=False),       # T42: like Save
+            "export_to": lambda: self.export(ask=True),     # T42: like Save As
             "overwrite": self.overwrite,
             "copy_frame": self.copy_frame,
             "fit": self.zoom_fit,
@@ -511,9 +512,8 @@ class MainWindow(QMainWindow):
         row("settings")
         menu.addSeparator()
         row("open", self.worker is None)
-        row("export", loaded, title=self._export_title())                  # T42
-        if not self._asks_where():
-            row("export_to", loaded)
+        row("export", loaded)                                               # T42
+        row("export_to", loaded)
         row("overwrite", loaded)
         row("copy_frame", self.info is not None)
         menu.addSeparator()                                                 # T29
@@ -1321,7 +1321,7 @@ class MainWindow(QMainWindow):
             self.export_button.setEnabled(False)
             self.worker.cancel()
         else:
-            self.export()
+            self.export(ask=self._asks_where())   # T42: the button follows Save To
 
     def _kind(self) -> str:
         """mp4 | gif | png | copy — Original falls back to mp4 if something needs re-encoding."""
@@ -1345,17 +1345,17 @@ class MainWindow(QMainWindow):
         return self.config.get("save_to") == "ask"
 
     def _export_title(self) -> str:
-        """T42: "…" = a dialog will open."""
+        """T42: the button's label; "…" = a dialog will open."""
         return "Export to…" if self._asks_where() else "Export"
 
     def _config_changed(self) -> None:
         self.export_button.set_idle_text(self._export_title())
 
     def export(self, ask: bool = False) -> None:
-        """T42: Ctrl+E/button follow Save To; Ctrl+Shift+E (ask=True) always asks."""
+        """T42: Ctrl+E — next to the source, Ctrl+Shift+E — asks where (Save / Save As);
+        Save To only decides what the button does."""
         if self.info is None or self.worker is not None:
             return
-        ask = ask or self._asks_where()
         if self._kind() == "png":
             self._export_png(ask)
             return
