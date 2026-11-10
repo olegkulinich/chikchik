@@ -121,6 +121,7 @@ class Field(QFrame):
 
     committed = Signal(str)
     nudged = Signal(int, bool)
+    ctrl_clicked = Signal()        # T39: Ctrl+click (Cmd on macOS) on the ⌛ field
     scrub_started = Signal()
     scrub_finished = Signal()
     left = Signal()
@@ -149,6 +150,7 @@ class Field(QFrame):
         if not prefix and icon is None:
             self.prefix.hide()
         self._value = ""
+        self.ctrl_click = False        # T39: only the ⌛ field reacts to Ctrl+click
         self._origin: QPoint | None = None
         self._last_x = 0.0
         self._button = Qt.MouseButton.NoButton
@@ -198,6 +200,11 @@ class Field(QFrame):
     def _press(self, event) -> bool:
         if not self.edit.isEnabled() or self.edit.hasFocus():
             return False
+        if (event.button() == Qt.MouseButton.LeftButton
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                and self.ctrl_click):
+            self.ctrl_clicked.emit()
+            return True
         if event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
             return False
         self._origin = event.globalPosition().toPoint()
@@ -508,6 +515,8 @@ class Timeline(QWidget):
     MAX_PX_PER_FRAME = 10
     LABEL_SPACING = 110   # px, minimum distance between ruler labels
     NICE_STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200)
+    NICE_FRAME_STEPS = (1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
+                        25000, 50000, 100000, 250000)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -528,6 +537,7 @@ class Timeline(QWidget):
         self._moved = False
         self._last_move = 0.0
         self._pan: tuple[float, float] | None = None   # (press x, view_start at press)
+        self.frames_mode = False        # T39: ruler in frame numbers
 
     # --- state
     def set_duration(self, duration: float, frame_duration: float | None = None) -> None:
@@ -554,6 +564,10 @@ class Timeline(QWidget):
 
     def set_trim_enabled(self, enabled: bool) -> None:
         self.trim_enabled = enabled
+        self.update()
+
+    def set_frames_mode(self, enabled: bool) -> None:
+        self.frames_mode = enabled
         self.update()
 
     def is_dragging(self) -> bool:
@@ -599,12 +613,19 @@ class Timeline(QWidget):
     # --- ruler
     def _label_step(self) -> float:
         px_per_s = (self.width() - 1) / self._span()
+        if self.frames_mode:
+            for frames in self.NICE_FRAME_STEPS:
+                if frames * self.frame_duration * px_per_s >= self.LABEL_SPACING:
+                    return frames * self.frame_duration
+            return self.NICE_FRAME_STEPS[-1] * self.frame_duration
         for step in self.NICE_STEPS:
             if step * px_per_s >= self.LABEL_SPACING:
                 return step
         return self.NICE_STEPS[-1]
 
     def _label(self, t: float, step: float) -> str:
+        if self.frames_mode:
+            return str(round(t / self.frame_duration))
         hours = self.duration >= 3600
         if step < 1:
             minutes, seconds = divmod(t, 60)
@@ -634,6 +655,8 @@ class Timeline(QWidget):
             baseline = (h + self.MINIMAP_H + metrics.ascent() - metrics.descent()) / 2
             t = first
             while t <= self.view_end + step:
+                if self.frames_mode:            # exact multiples: no drift over long files
+                    t = round(t / self.frame_duration) * self.frame_duration
                 x = self._x(t)
                 if -metrics.horizontalAdvance("00:00:00") <= x <= w:
                     tx = round(x)

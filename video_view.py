@@ -268,6 +268,21 @@ class VideoView(QOpenGLWidget):
             target, self._pending = self._pending, None
             self._send_seek(target)
 
+    def set_loop(self, enabled: bool, start: float | None = None, end: float | None = None) -> None:
+        """T21: loop the trim range (A–B) or, without one, the whole file."""
+        if not enabled:
+            self._command("set", "ab-loop-a", "no")
+            self._command("set", "ab-loop-b", "no")
+            self._command("set", "loop-file", "no")
+        elif start is None or end is None:
+            self._command("set", "ab-loop-a", "no")
+            self._command("set", "ab-loop-b", "no")
+            self._command("set", "loop-file", "inf")
+        else:
+            self._command("set", "loop-file", "no")
+            self._command("set", "ab-loop-a", f"{start:.6f}")
+            self._command("set", "ab-loop-b", f"{end:.6f}")
+
     def seek_relative(self, delta: float) -> None:
         self._command("seek", f"{delta:.6f}", "relative+exact")
 
