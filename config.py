@@ -14,6 +14,10 @@ DEFAULTS = {
     "quality": "normal",     # high | normal | small  (High / Medium / Low)
     "speed": "medium",       # fast | medium | slow
     "save_to": "same",       # same | ask
+    "autoplay": "1",         # T35: start playing when a file opens
+    "default_format": "mp4", # T25: mp4 | gif | png | copy (Original)
+    "last_used": "0",        # T25: open with the format of the last export
+    "last_format": "",       # T25: format of the last successful export
 }
 
 
@@ -43,7 +47,14 @@ HOTKEY_ACTIONS = (
     HotkeyAction("scale_2", "Scale 0.5x", "2"),
     HotkeyAction("scale_3", "Scale 0.33x", "3"),
     HotkeyAction("scale_4", "Scale 0.25x", "4"),
+    # T37: formats, same order as everywhere — .mp4 / .gif / .png / Original
+    HotkeyAction("fmt_mp4", "Format .mp4", "M"),
+    HotkeyAction("fmt_gif", "Format .gif", "G"),
+    HotkeyAction("fmt_png", "Format .png", "P"),
+    HotkeyAction("fmt_copy", "Format Original", "0"),
 )
+
+FORMAT_HOTKEYS = {"fmt_mp4": "mp4", "fmt_gif": "gif", "fmt_png": "png", "fmt_copy": "copy"}
 
 SCALE_HOTKEYS = {"scale_1": 1.0, "scale_2": 0.5, "scale_3": 1 / 3, "scale_4": 0.25}
 
@@ -54,6 +65,7 @@ MENU_SHORTCUTS = {
     "open": ("Open", "Ctrl+O"),
     "export": ("Export", "Ctrl+E"),
     "overwrite": ("Overwrite", "Ctrl+Shift+S"),
+    "copy_frame": ("Copy Frame", "Ctrl+C"),   # T19a
     "quit": ("Quit", "Ctrl+Q"),
 }
 
@@ -88,6 +100,18 @@ class Config(QObject):
         if self.get(key) != value:
             self._store.setValue(f"export/{key}", value)
             self.changed.emit()
+
+    def flag(self, key: str) -> bool:
+        return self.get(key) in ("1", "true", "True")
+
+    def set_flag(self, key: str, value: bool) -> None:
+        self.set(key, "1" if value else "0")
+
+    def start_format(self) -> str:
+        """T25: the format a newly opened file starts with."""
+        if self.flag("last_used") and self.get("last_format"):
+            return self.get("last_format")
+        return self.get("default_format")
 
     @property
     def crf(self) -> int:

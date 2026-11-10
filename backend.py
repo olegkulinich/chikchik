@@ -135,7 +135,8 @@ class ExportJob:
     subtitle: SubtitleTrack | None = None
     scale: float = 1.0
     fps: float | None = None          # output frame rate; None = keep the source rate
-    kind: str = "mp4"                 # mp4 | copy | gif
+    kind: str = "mp4"                 # mp4 | copy | gif | png
+    start_number: int = 0             # PNG only: number of the first frame (source frame of In)
     palette: Path | None = None       # GIF only: temporary palette next to the output
 
 
@@ -360,6 +361,16 @@ def normalize_crop(crop: CropRect, frame_width: int, frame_height: int) -> CropR
     return CropRect(x=x, y=y, width=max(2, width), height=max(2, height))
 
 
+def clamp_crop(crop: CropRect, frame_width: int, frame_height: int) -> CropRect:
+    """Clamp only — exact pixels for RGB outputs (PNG, GIF, Copy Frame), which
+    don't need the even geometry of yuv420p."""
+    x = max(0, min(crop.x, frame_width - 1))
+    y = max(0, min(crop.y, frame_height - 1))
+    width = max(1, min(crop.width, frame_width - x))
+    height = max(1, min(crop.height, frame_height - y))
+    return CropRect(x=x, y=y, width=width, height=height)
+
+
 def scaled_size(width: int, height: int, scale: float) -> tuple[int, int]:
     """Output size after scaling, rounded to even numbers (yuv420p)."""
     def even(value: float) -> int:
@@ -528,6 +539,45 @@ def build_gif_commands(job: ExportJob) -> tuple[list[list[str]], str]:
         "-an", "-f", "gif", "-y", str(job.temporary_output),
     ]
     return [first, second], warning
+
+
+def png_pattern(folder: Path, stem: str, frame_count: int) -> Path:
+    """T19b: name_0300.png … — at least 4 digits, more for long sources."""
+    digits = max(4, len(str(max(0, frame_count))))
+    return folder / f"{stem}_%0{digits}d.png"
+
+
+def build_png_command(job: ExportJob) -> tuple[list[str], str]:
+    """PNG sequence straight into the target folder (frames written so far stay on cancel).
+    `job.final_output` is the pattern (…/name_%04d.png)."""
+    if job.duration <= 0:
+        raise RuntimeError("Out must be later than In")
+    filters, _tags, warning = video_filters(job.info, job.crop, job.scale, job.fps, gif=True)
+    filters.append("format=rgb24")
+    command = [
+        executable("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-progress", "pipe:1", "-nostats",
+        *_input_args(job),
+        "-map", f"0:{job.info.video_index}", "-an", "-sn",
+        "-vf", ",".join(filters),
+        "-start_number", str(job.start_number),
+        "-f", "image2", "-y", str(job.final_output),
+    ]
+    return command, warning
+
+
+def build_frame_command(source: Path, info: MediaInfo, time: float,
+                        crop: CropRect | None, scale: float) -> list[str]:
+    """T19a: one exact frame as PNG on stdout (Copy Frame)."""
+    filters, _tags, _warning = video_filters(info, crop, scale, None, gif=True)
+    filters.append("format=rgb24")
+    return [
+        executable("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-ss", seconds(time), "-i", str(source),
+        "-map", f"0:{info.video_index}", "-an", "-sn",
+        "-vf", ",".join(filters), "-frames:v", "1",
+        "-f", "image2pipe", "-c:v", "png", "-",
+    ]
 
 
 def palette_path(target: Path) -> Path:

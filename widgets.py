@@ -343,20 +343,22 @@ class PlayButton(QPushButton):
 
 
 class ProgressButton(QPushButton):
-    """Export button that turns into 'Cancel · 45%' with a fill while busy."""
+    """Export button: while busy shows the progress with a fill; on hover it turns
+    red and reads "Cancel" (T19c) — a click cancels."""
 
     def __init__(self, text: str, parent=None):
         super().__init__(text, parent)
         self.idle_text = text
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.busy = False
         self.percent = 0
 
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
         self.percent = 0
-        self.setText("Cancel · 0%" if busy else self.idle_text)
+        self.setText("0%" if busy else self.idle_text)
         self.update()
 
     def set_percent(self, percent: int) -> None:
@@ -366,8 +368,13 @@ class ProgressButton(QPushButton):
         """Fill = overall progress; text shows the stage when there are several."""
         self.percent = round((stage + percent / 100) / max(1, total) * 100)
         prefix = f"{stage + 1}/{total} · " if total > 1 else ""
-        self.setText(f"Cancel · {prefix}{percent}%")
+        self.setText(f"{prefix}{percent}%")
         self.update()
+
+    def event(self, event) -> bool:
+        if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverLeave):
+            self.update()
+        return super().event(event)
 
     def paintEvent(self, event) -> None:
         if not self.busy:
@@ -377,7 +384,13 @@ class ProgressButton(QPushButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), theme.RADIUS, theme.RADIUS)
-        p.fillPath(path, QColor(theme.BUTTON_HOVER if self.underMouse() else theme.BUTTON))
+        if self.underMouse() and self.isEnabled():
+            p.fillPath(path, QColor(theme.ERROR_BG))
+            p.setPen(QColor(theme.ERROR_FG))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Cancel")
+            p.end()
+            return
+        p.fillPath(path, QColor(theme.BUTTON))
         p.setClipPath(path)
         fill = QRectF(self.rect())
         fill.setWidth(fill.width() * self.percent / 100)
@@ -385,6 +398,58 @@ class ProgressButton(QPushButton):
         p.setClipping(False)
         p.setPen(QColor(theme.TEXT))
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+        p.end()
+
+
+class CheckBox(QWidget):
+    """Small rounded box with ✓ + label (Figma "Frame 47"). Emits `toggled(bool)`."""
+
+    toggled = Signal(bool)
+    BOX = 18
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self.text = text
+        self.checked = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(theme.H)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+
+    def sizeHint(self):  # noqa: N802
+        from PySide6.QtCore import QSize
+        return QSize(self.BOX + 8 + self.fontMetrics().horizontalAdvance(self.text), theme.H)
+
+    def minimumSizeHint(self):  # noqa: N802
+        return self.sizeHint()
+
+    def set_checked(self, value: bool) -> None:
+        if self.checked != value:
+            self.checked = value
+            self.update()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.set_checked(not self.checked)
+            self.toggled.emit(self.checked)
+
+    def event(self, event) -> bool:
+        if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverLeave):
+            self.update()
+        return super().event(event)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        top = (self.height() - self.BOX) / 2
+        box = QRectF(0, top, self.BOX, self.BOX)
+        path = QPainterPath()
+        path.addRoundedRect(box, 4, 4)
+        p.fillPath(path, QColor(theme.BUTTON_HOVER if self.underMouse() else theme.BUTTON))
+        p.setPen(QColor(theme.TEXT))
+        if self.checked:
+            p.drawText(box, Qt.AlignmentFlag.AlignCenter, "✓")
+        text_rect = self.rect().adjusted(self.BOX + 8, 0, 0, 0)
+        p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text)
         p.end()
 
 

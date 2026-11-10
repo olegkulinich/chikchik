@@ -187,15 +187,17 @@ class VideoView(QOpenGLWidget):
 
     # ------------------------------------------------------- control
     def load(self, path: Path, frame_size: tuple[int, int], aid: int | None,
-             sid: int | None = None) -> None:
+             sid: int | None = None, autoplay: bool = True) -> None:
         self.frame_size = frame_size
         self.has_video = True
         self._in_flight = self._pending = None
-        self._state.update({"time-pos": None, "eof-reached": False, "pause": False})
+        paused = not autoplay        # T35: off → the first frame, paused
+        self._state.update({"time-pos": None, "eof-reached": False, "pause": paused})
+        self.player.pause = paused   # before loadfile: mpv shows frame 1 and waits
         self.player.command("loadfile", str(path), "replace")
         self.set_audio(aid)
         self.set_subtitle(sid)
-        self.player.pause = False
+        self.player.pause = paused
         self.update()
 
     def set_audio(self, aid: int | None) -> None:
