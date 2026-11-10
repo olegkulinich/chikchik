@@ -362,6 +362,15 @@ class ProgressButton(QPushButton):
         self.busy = False
         self.percent = 0
 
+    def set_idle_text(self, text: str) -> None:
+        """T42: the label follows Save To (Export / Export to…)."""
+        self.idle_text = text
+        # padding 10 px + 4 px air per side: the label never gets clipped
+        self.setMinimumWidth(max(64, self.fontMetrics().horizontalAdvance(text) + 28))
+        if not self.busy:
+            self.setText(text)
+        self.updateGeometry()
+
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
         self.percent = 0

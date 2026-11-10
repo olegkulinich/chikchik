@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent, QKeySequence
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+                               QScrollArea, QWidget)
 
 import theme
 from config import HOTKEY_ACTIONS, Config, display_key
@@ -111,7 +112,7 @@ class KeyCap(QPushButton):
         self.portable = ""
         super().__init__(parent)
         self.setProperty("keycap", True)
-        self.setFixedWidth(72)
+        self.setMinimumWidth(72)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.clicked.connect(self.start)
@@ -119,6 +120,10 @@ class KeyCap(QPushButton):
     def set_key(self, portable: str) -> None:
         self.portable = portable
         self.setText(display_key(portable))
+
+    def natural_width(self) -> int:
+        """Text + padding (8 px each side) + 2 px air each side, at least 64 px."""
+        return max(64, self.fontMetrics().horizontalAdvance(self.text()) + 16 + 4)
 
     def start(self) -> None:
         self.capturing = True
@@ -174,15 +179,21 @@ class KeyCap(QPushButton):
 
 
 class HotkeysPopover(Popover):
+    """T29: width follows the content (16 px at the sides and between the columns),
+    all key caps as wide as the widest one, at most MAX_ROWS rows — then it scrolls."""
+
+    MAX_ROWS = 20
+    ROW_SPACING = 6
+
     def __init__(self, config: Config, parent=None):
         super().__init__("Hotkeys", parent)
         self.config = config
-        self.setFixedWidth(312)
 
-        grid = QGridLayout()
+        content = QWidget()
+        self._grid = grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(theme.GAP2)
-        grid.setVerticalSpacing(6)
+        grid.setVerticalSpacing(self.ROW_SPACING)
         self.caps: dict[str, KeyCap] = {}
         for row, action in enumerate(HOTKEY_ACTIONS):
             grid.addWidget(QLabel(action.title), row, 0)
@@ -190,7 +201,23 @@ class HotkeysPopover(Popover):
             cap.captured.connect(lambda combo, a=action.id: self._assign(a, combo))
             grid.addWidget(cap, row, 1, Qt.AlignmentFlag.AlignRight)
             self.caps[action.id] = cap
-        self.body.addLayout(grid)
+        # Reference only: frames mode is a Ctrl+click, not a reassignable key.
+        row = len(HOTKEY_ACTIONS)
+        grid.addWidget(QLabel("Frames / Timecode"), row, 0)
+        self._ref = dim_label("Ctrl+Click ⌛")
+        self._ref.setAlignment(Qt.AlignmentFlag.AlignCenter)    # centered like the key caps
+        grid.addWidget(self._ref, row, 1, Qt.AlignmentFlag.AlignRight)
+        self._rows = row + 1
+
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("HotkeysScroll")
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidget(content)
+        self._content = content
+        self.body.addWidget(self.scroll)
 
         self.message = QLabel(" ")
         self.message.setStyleSheet(f"color: {theme.ERROR_FG};")
@@ -214,9 +241,29 @@ class HotkeysPopover(Popover):
         config.hotkeys_changed.connect(self.refresh)
         self.refresh()
 
+    def _fit(self) -> None:
+        """Caps share the widest width; the list shows at most MAX_ROWS rows."""
+        widest = max(cap.natural_width() for cap in self.caps.values())
+        widest = max(widest, self._ref.sizeHint().width())
+        for cap in self.caps.values():
+            cap.setFixedWidth(widest)
+        self._ref.setFixedWidth(widest)
+        row_h = max(cap.sizeHint().height() for cap in self.caps.values())
+        rows = min(self._rows, self.MAX_ROWS)
+        visible = rows * row_h + (rows - 1) * self.ROW_SPACING
+        scrolls = self._rows > self.MAX_ROWS
+        # keys ↔ scrollbar: the same 16 px as between the columns
+        self._grid.setContentsMargins(0, 0, theme.GAP2 if scrolls else 0, 0)
+        self._content.adjustSize()
+        hint = self._content.sizeHint()
+        bar = self.scroll.verticalScrollBar().sizeHint().width() if scrolls else 0
+        self.scroll.setFixedSize(hint.width() + bar, min(hint.height(), visible))
+        self.adjustSize()
+
     def refresh(self) -> None:
         for action_id, cap in self.caps.items():
             cap.set_key(self.config.hotkey(action_id))
+        self._fit()
 
     def _assign(self, action_id: str, combo: str) -> None:
         owner = self.config.owner_of(combo, exclude=action_id)

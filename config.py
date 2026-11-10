@@ -69,9 +69,12 @@ MENU_SHORTCUTS = {
     "hotkeys": ("Hotkeys", "Ctrl+/"),
     "settings": ("Settings", "Ctrl+K"),
     "open": ("Open", "Ctrl+O"),
-    "export": ("Export", "Ctrl+E"),
+    "export": ("Export", "Ctrl+E"),                # T42: "Export to…" when Save To = Ask
+    "export_to": ("Export to…", "Ctrl+Shift+E"),   # T42: always asks where
     "overwrite": ("Overwrite", "Ctrl+Shift+S"),
     "copy_frame": ("Copy Frame", "Ctrl+C"),   # T19a
+    "fit": ("Fit", "Ctrl+0"),                 # T20
+    "actual_size": ("Actual Size", "Ctrl+1"), # T20
     "quit": ("Quit", "Ctrl+Q"),
 }
 
