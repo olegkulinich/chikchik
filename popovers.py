@@ -18,16 +18,15 @@ class SettingsPopover(Popover):
         self.setFixedWidth(312)
 
         self.quality = self._section("Quality", [
-            ("high", "High", "CRF 18 — visually lossless, bigger file (.mp4 only)"),
-            ("normal", "Normal", "CRF 20"),
-            ("small", "Small", "CRF 23 — smaller file"),
-        ], "quality")
+            ("high", "High", "CRF 18"),
+            ("normal", "Medium", "CRF 20"),
+            ("small", "Low", "CRF 25"),
+        ], "quality", hint="Higher quality — bigger file.")
         self.speed = self._section("Speed", [
-            ("veryfast", "Very Fast", "x264 preset veryfast"),
             ("fast", "Fast", "x264 preset fast"),
             ("medium", "Medium", "x264 preset medium"),
-            ("slow", "Slow", "x264 preset slow — smaller file, same quality"),
-        ], "speed")
+            ("slow", "Slow", "x264 preset slow"),
+        ], "speed", hint="Slower — smaller file, same quality.")
         self.save_to = self._section("Save to", [
             ("same", "Same Folder", "Save next to the source as name.cut.mp4 / .gif"),
             ("ask", "Ask", "Show a Save As dialog"),
@@ -41,11 +40,14 @@ class SettingsPopover(Popover):
         config.changed.connect(self.refresh)
         self.refresh()
 
-    def _section(self, title: str, options, key: str, last: bool = False) -> Segmented:
+    def _section(self, title: str, options, key: str, last: bool = False,
+                 hint: str = "") -> Segmented:
         self.body.addWidget(QLabel(title))
         seg = Segmented(options)
         seg.selected.connect(lambda value, k=key: self.config.set(k, value))
         self.body.addWidget(seg)
+        if hint:                       # T26: one line under the buttons
+            self.body.addWidget(dim_label(hint))
         if not last:
             self.body.addSpacing(10)
         return seg
