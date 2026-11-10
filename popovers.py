@@ -122,8 +122,8 @@ class KeyCap(QPushButton):
         self.setText(display_key(portable))
 
     def natural_width(self) -> int:
-        """Text + padding (8 px each side), at least the old 72 px."""
-        return max(72, self.fontMetrics().horizontalAdvance(self.text()) + 16 + 8)
+        """Text + padding (8 px each side) + 8 px air each side, at least 72 px."""
+        return max(72, self.fontMetrics().horizontalAdvance(self.text()) + 16 + 16)
 
     def start(self) -> None:
         self.capturing = True
