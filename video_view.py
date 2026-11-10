@@ -352,8 +352,9 @@ class VideoView(QOpenGLWidget):
         self.player.pause = paused   # before loadfile: mpv shows frame 1 and waits
         if sequence_fps:
             self._set_option("mf-fps", f"{sequence_fps:.6f}")
-        self._set_option("alpha", "blend")          # transparency over black (mpv ≤ 0.37)
-        self._set_option("background", "color")    # the same for mpv ≥ 0.38
+        # T36: transparency on a checkerboard (export decides the rest)
+        self._set_option("alpha", "blend-tiles")    # mpv ≤ 0.37
+        self._set_option("background", "tiles")     # mpv ≥ 0.38
         self.player.command("loadfile", str(path), "replace")
         self.set_audio(aid)
         self.set_subtitle(sid)

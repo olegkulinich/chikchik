@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QProcess, QPropertyAnimation,
-                            QRect, Qt, QTimer, QUrl)
+from PySide6.QtCore import (QEasingCurve, QEvent, QMimeData, QPoint, QPointF, QProcess,
+                            QPropertyAnimation, QRect, Qt, QTimer, QUrl)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -673,6 +673,14 @@ class MainWindow(QMainWindow):
                     self.toggle_hide_ui()
             event.accept()
             return True
+        if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
+                and self._is_export_key(event):
+            # T42: Ctrl+E / Ctrl+Shift+E handled here, once — on Windows the pair was
+            # seen to start both exports. ShortcutOverride accepted → no QAction fires.
+            if kind == QEvent.Type.KeyPress and not event.isAutoRepeat():
+                self.export(ask=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+            event.accept()
+            return True
         if in_window and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
                                   QEvent.Type.MouseButtonRelease) and self._rmb_event(obj, event):
             return True
@@ -890,7 +898,7 @@ class MainWindow(QMainWindow):
         the frame instead of the clean state."""
         sequence = info.sequence
         if sequence is not None:
-            path = sequence.files[0] if keep is None else path
+            path = sequence.first_file if keep is None else path
 
         self.source, self.info = path, info
         if sequence is not None:
@@ -1757,6 +1765,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------ right-button drag (PureRef)
     RMB_DRAG = 5             # px before a right press moves the window instead of the menu
 
+    @staticmethod
+    def _is_export_key(event) -> bool:
+        mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if mods not in (Qt.KeyboardModifier.ControlModifier,
+                        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            return False
+        return event.key() == Qt.Key.Key_E or (win_frame.ENABLED and event.nativeVirtualKey() == 0x45)
+
     def _rmb_event(self, obj, event) -> bool:
         """Right button anywhere in the window: click → menu, drag → move the window.
         Dragging out of fullscreen (or a maximized window) restores it under the cursor."""
@@ -2182,6 +2198,7 @@ class MainWindow(QMainWindow):
 
     def _png_done(self, job: ExportJob, success: bool, error: str) -> None:
         folder = job.final_output.parent
+        self._drop_gap_frames(job)
         count = len(self._png_frames(job))
         self._toast_path = folder
         if success:
@@ -2200,6 +2217,21 @@ class MainWindow(QMainWindow):
             self.toast.show_message(f"Export cancelled · {count} frames kept", action=True)
         else:
             self.toast.show_message("Export cancelled", action=False, ms=3000)
+
+    @staticmethod
+    def _drop_gap_frames(job: ExportJob) -> None:
+        """T36: missing source frames stay missing in a .png export (shot_1012.png isn't
+        written) — the numbering keeps matching the source, the gap stays visible."""
+        sequence = job.info.sequence
+        if sequence is None:
+            return
+        for first, last in sequence.missing():
+            for number in range(first, last + 1):
+                try:
+                    (job.final_output.parent / (job.final_output.name % number)).unlink(
+                        missing_ok=True)
+                except (OSError, TypeError):
+                    pass
 
     # ---------------------------------------------------- Copy Frame (T19a)
     def copy_frame(self) -> None:
@@ -2229,7 +2261,14 @@ class MainWindow(QMainWindow):
         if image.isNull():
             self.toast.show_message("Could not copy the frame", action=False, error=True, ms=4000)
             return
-        QApplication.clipboard().setImage(image)
+        mime = QMimeData()
+        mime.setImageData(image)
+        if image.hasAlphaChannel():
+            # T36: the bitmap formats drop transparency; Figma, Photoshop and browsers
+            # read the PNG one
+            mime.setData("PNG", data)
+            mime.setData("image/png", data)
+        QApplication.clipboard().setMimeData(mime)
         self.toast.show_message(f"Frame copied · {image.width()}×{image.height()}",
                                 action=False, ms=2500)
 

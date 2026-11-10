@@ -90,12 +90,19 @@ _TRAILING_NUMBER = re.compile(r"^(.*?)(\d+)$")
 
 @dataclass(frozen=True)
 class ImageSequence:
-    """PNG/JPG frames numbered in the name. Gaps are glued: frame i = files[i]."""
-    files: tuple[Path, ...]
-    numbers: tuple[int, ...]       # the number in each file name
+    """PNG/JPG frames numbered in the name. Frame i has number `first + i`; a missing
+    number is None and plays as a black frame — the timing stays honest (the program
+    doesn't decide that a gap is a cut)."""
+    files: tuple[Path | None, ...]
+    first: int                     # number of frame 0
     prefix: str                    # name before the number ("shot_")
     digits: int                    # width of the number in the first file
     suffix: str                    # ".png"
+    placeholder: Path | None = None   # black frame for the gaps (made by probe_sequence)
+
+    @property
+    def numbers(self) -> tuple[int, ...]:
+        return tuple(range(self.first, self.first + len(self.files)))
 
     @property
     def display_name(self) -> str:
@@ -107,12 +114,26 @@ class ImageSequence:
         """Base for export names: "shot_" → "shot" (an all-number name → "sequence")."""
         return self.prefix.rstrip(" ._-") or "sequence"
 
+    def frame(self, index: int) -> Path:
+        """The file of frame `index`, the black placeholder for a gap."""
+        path = self.files[index]
+        return path if path is not None else (self.placeholder or self.first_file)
+
+    @property
+    def first_file(self) -> Path:
+        return next(f for f in self.files if f is not None)
+
     def missing(self) -> list[tuple[int, int]]:
         """Gaps as (first, last) number ranges."""
-        gaps = []
-        for a, b in zip(self.numbers, self.numbers[1:]):
-            if b - a > 1:
-                gaps.append((a + 1, b - 1))
+        gaps: list[tuple[int, int]] = []
+        for i, path in enumerate(self.files):
+            if path is not None:
+                continue
+            number = self.first + i
+            if gaps and gaps[-1][1] == number - 1:
+                gaps[-1] = (gaps[-1][0], number)
+            else:
+                gaps.append((number, number))
         return gaps
 
 
@@ -123,7 +144,7 @@ def find_sequence(path: Path) -> ImageSequence:
     suffix = path.suffix
     match = _TRAILING_NUMBER.match(path.stem)
     if not match:
-        return ImageSequence((path,), (0,), path.stem, 0, suffix)
+        return ImageSequence((path,), 0, path.stem, 0, suffix)
     prefix = match.group(1)
     found: list[tuple[int, Path]] = []
     pattern = re.compile(re.escape(prefix) + r"(\d+)$", re.IGNORECASE)
@@ -140,9 +161,10 @@ def find_sequence(path: Path) -> ImageSequence:
             found.append((int(m.group(1)), Path(entry.path)))
     if not found:
         found = [(int(match.group(2)), path)]
-    found.sort(key=lambda item: item[0])
+    by_number = dict(found)
+    first, last = min(by_number), max(by_number)
     return ImageSequence(
-        files=tuple(f for _, f in found), numbers=tuple(n for n, _ in found),
+        files=tuple(by_number.get(n) for n in range(first, last + 1)), first=first,
         prefix=prefix, digits=len(match.group(2)), suffix=suffix,
     )
 
@@ -177,7 +199,8 @@ class MediaInfo:
 
     @property
     def alpha(self) -> bool:
-        """Sequences with transparency are shown and exported over black."""
+        """Sequences with transparency: checkerboard in the view, black in .mp4/.gif,
+    kept in .png and Copy Frame."""
         return self.sequence is not None and ("a" in self.pix_fmt.replace("gray", "")
                                               or self.pix_fmt.startswith("ya"))
 
@@ -412,7 +435,7 @@ def probe_sequence(sequence: ImageSequence, fps: float = SEQUENCE_FPS) -> MediaI
     result = _run([
         executable("ffprobe"), "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=width,height,pix_fmt,codec_name", "-of", "json",
-        str(sequence.files[0]),
+        str(sequence.first_file),
     ])
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "FFprobe could not open the image")
@@ -420,13 +443,33 @@ def probe_sequence(sequence: ImageSequence, fps: float = SEQUENCE_FPS) -> MediaI
     if not streams:
         raise RuntimeError("No image found")
     image = streams[0]
+    width, height = int(image.get("width") or 0), int(image.get("height") or 0)
+    pix_fmt = str(image.get("pix_fmt") or "")
+    if any(f is None for f in sequence.files):
+        sequence = replace(sequence, placeholder=_black_frame(sequence, width, height, pix_fmt))
     return MediaInfo(
-        duration=len(sequence.files) / fps, width=int(image.get("width") or 0),
-        height=int(image.get("height") or 0), fps=fps,
+        duration=len(sequence.files) / fps, width=width, height=height, fps=fps,
         codec=str(image.get("codec_name") or "png"), video_index=0,
-        pix_fmt=str(image.get("pix_fmt") or ""), color_transfer="", color_primaries="",
+        pix_fmt=pix_fmt, color_transfer="", color_primaries="",
         color_space="", color_range="", sequence=sequence,
     )
+
+
+def _black_frame(sequence: ImageSequence, width: int, height: int, pix_fmt: str) -> Path:
+    """An opaque black frame in the sequence's own format and pixel format (concat and
+    mpv's mf want one codec and one size)."""
+    handle, name = tempfile.mkstemp(prefix="chikchik-gap-", suffix=sequence.suffix.lower())
+    os.close(handle)
+    fmt = pix_fmt if pix_fmt and sequence.suffix.lower() == ".png" else ""
+    chain = f"format={fmt}" if fmt else "null"
+    result = _run([
+        executable("ffmpeg"), "-v", "error", "-f", "lavfi",
+        "-i", f"color=c=black:s={width}x{height}", "-frames:v", "1",
+        "-vf", chain, "-y", name,
+    ])
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "Could not make a frame for the gaps")
+    return Path(name)
 
 
 def with_fps(info: MediaInfo, fps: float) -> MediaInfo:
@@ -442,10 +485,9 @@ def sequence_list(sequence: ImageSequence, first: int, count: int, fps: float) -
     """FFmpeg concat list of frames [first, first + count) — the exact frames, glued
     over gaps, each 1/fps long. (The usual trick of repeating the last file adds a
     frame; the output is cut with -frames:v instead.)"""
-    files = sequence.files[first:first + count]
     lines = []
-    for f in files:
-        lines.append(f"file '{_concat_escape(f)}'")
+    for index in range(first, min(len(sequence.files), first + count)):
+        lines.append(f"file '{_concat_escape(sequence.frame(index))}'")
         lines.append(f"duration {1.0 / fps:.9f}")
     handle, name = tempfile.mkstemp(prefix="chikchik-seq-", suffix=".txt")
     with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -457,7 +499,8 @@ def mpv_list(sequence: ImageSequence) -> Path:
     """mpv mf://@list — one frame path per line."""
     handle, name = tempfile.mkstemp(prefix="chikchik-mf-", suffix=".txt")
     with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        stream.write("\n".join(str(f) for f in sequence.files) + "\n")
+        stream.write("\n".join(str(sequence.frame(i)) for i in range(len(sequence.files)))
+                     + "\n")
     return Path(name)
 
 
@@ -527,10 +570,12 @@ def format_fps(value: float) -> str:
 
 
 def video_filters(info: MediaInfo, crop: CropRect | None, scale: float = 1.0,
-                  fps: float | None = None, gif: bool = False) -> tuple[list[str], list[str], str]:
-    """Return (filters, color tag args, warning)."""
+                  fps: float | None = None, gif: bool = False,
+                  keep_alpha: bool = False) -> tuple[list[str], list[str], str]:
+    """Return (filters, color tag args, warning). `keep_alpha` — PNG and Copy Frame keep
+    transparency; .mp4/.gif get it over black."""
     filters: list[str] = []
-    if info.alpha:
+    if info.alpha and not keep_alpha:
         # T36: transparent frames over black — premultiplied color is black where alpha is 0
         filters += ["premultiply=inplace=1", "format=rgb24"]
     if fps:
@@ -712,8 +757,9 @@ def build_png_command(job: ExportJob) -> tuple[list[str], str]:
     `job.final_output` is the pattern (…/name_%04d.png)."""
     if job.duration <= 0:
         raise RuntimeError("Out must be later than In")
-    filters, _tags, warning = video_filters(job.info, job.crop, job.scale, job.fps, gif=True)
-    filters.append("format=rgb24")
+    filters, _tags, warning = video_filters(job.info, job.crop, job.scale, job.fps, gif=True,
+                                            keep_alpha=True)
+    filters.append("format=rgba" if job.info.alpha else "format=rgb24")
     command = [
         executable("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
         "-progress", "pipe:1", "-nostats",
@@ -730,12 +776,12 @@ def build_png_command(job: ExportJob) -> tuple[list[str], str]:
 def build_frame_command(source: Path, info: MediaInfo, time: float,
                         crop: CropRect | None, scale: float) -> list[str]:
     """T19a: one exact frame as PNG on stdout (Copy Frame)."""
-    filters, _tags, _warning = video_filters(info, crop, scale, None, gif=True)
-    filters.append("format=rgb24")
+    filters, _tags, _warning = video_filters(info, crop, scale, None, gif=True, keep_alpha=True)
+    filters.append("format=rgba" if info.alpha else "format=rgb24")
     if info.sequence is not None:          # T36: the frame's own file
-        files = info.sequence.files
-        index = max(0, min(len(files) - 1, int(math.floor(time * info.fps + 0.75))))
-        seek = ["-i", str(files[index])]
+        total = len(info.sequence.files)
+        index = max(0, min(total - 1, int(math.floor(time * info.fps + 0.75))))
+        seek = ["-i", str(info.sequence.frame(index))]
     else:
         seek = ["-ss", seconds(time), "-i", str(source)]
     return [
