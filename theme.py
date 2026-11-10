@@ -1,0 +1,193 @@
+"""Colors, sizes and the global stylesheet (values from the Figma mockup)."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import QApplication, QWidget
+
+# Colors
+WINDOW = "#1E1E1E"
+PANEL = "#232323"
+BUTTON = "#282828"
+BUTTON_HOVER = "#3B3B3B"
+ACTIVE = "#1B3032"
+ACTIVE_HOVER = "#23403F"
+ERROR_BG = "#3A1C1D"
+ERROR_FG = "#C44040"
+FIELD = "#151515"
+STROKE = "#333333"
+TEXT = "#FFFFFF"
+DIM = "#535353"
+HOTKEY_DIM = "#4A4A4A"
+MINIMAP_TRACK = "#262626"   # timeline minimap: whole file
+MINIMAP_VIEW = "#5A5A5A"    # timeline minimap: visible window
+RULER = "#3A3A3A"           # timeline ruler ticks   # hotkey column next to a dim column — a tone darker
+VIDEO_BG = "#000000"
+CROP = "#00F0FF"      # bright cyan — inverse of the red playhead
+PLAYHEAD = "#FF2A2A"
+TRIM_RANGE = ACTIVE   # same teal as the active Crop button
+
+# Sizes (everything on the 8 px grid)
+H = 24
+RADIUS = 8
+GAP = 8
+HGAP = 6     # between buttons/fields in a row
+GAP2 = 16
+FONT_PX = 12
+
+FONT_FAMILY = "Inter"
+
+
+def base_dir() -> Path:
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def load_fonts(app: QApplication) -> None:
+    global FONT_FAMILY
+    families: list[str] = []
+    for name in ("Inter-Regular.otf", "Inter-Medium.otf"):
+        font_id = QFontDatabase.addApplicationFont(str(base_dir() / "fonts" / name))
+        if font_id >= 0:
+            families += QFontDatabase.applicationFontFamilies(font_id)
+    FONT_FAMILY = families[0] if families else "Segoe UI"
+    font = QFont(FONT_FAMILY)
+    font.setPixelSize(FONT_PX)
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    app.setFont(font)
+
+
+def emoji_icon(emoji: str = "✂️", size: int = 256) -> QIcon:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    font = QFont("Segoe UI Emoji" if sys.platform == "win32" else "Noto Color Emoji")
+    font.setPixelSize(int(size * 0.78))
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, emoji)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def repolish(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+    widget.update()
+
+
+def set_flag(widget: QWidget, name: str, value: bool) -> None:
+    if bool(widget.property(name)) != value:
+        widget.setProperty(name, value)
+        repolish(widget)
+
+
+def dark_title_bar(widget: QWidget) -> None:
+    """Windows 10/11: dark native title bar in the window color."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        hwnd = int(widget.winId())
+        dwm = ctypes.windll.dwmapi
+        on = ctypes.c_int(1)
+        dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on))
+        color = QColor(WINDOW)
+        caption = ctypes.c_int(color.red() | color.green() << 8 | color.blue() << 16)
+        dwm.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(caption), ctypes.sizeof(caption))
+        text = QColor(DIM)
+        text_ref = ctypes.c_int(text.red() | text.green() << 8 | text.blue() << 16)
+        dwm.DwmSetWindowAttribute(hwnd, 36, ctypes.byref(text_ref), ctypes.sizeof(text_ref))
+    except Exception:
+        pass
+
+
+def stylesheet() -> str:
+    return f"""
+* {{
+    font-family: "{FONT_FAMILY}";
+    font-size: {FONT_PX}px;
+    color: {TEXT};
+    outline: none;
+}}
+QMainWindow, QDialog, QMessageBox {{ background: {WINDOW}; }}
+QLabel {{ background: transparent; }}
+QLabel[dim="true"] {{ color: {DIM}; }}
+
+QPushButton {{
+    background: {BUTTON};
+    border: none;
+    border-radius: {RADIUS}px;
+    padding: 0 10px;
+    min-height: {H}px; max-height: {H}px;
+}}
+QPushButton:hover {{ background: {BUTTON_HOVER}; }}
+QPushButton:disabled {{ background: {BUTTON}; color: {DIM}; }}
+QPushButton:checked {{ background: {ACTIVE}; }}
+QPushButton:checked:hover {{ background: {ACTIVE_HOVER}; }}
+QPushButton[error="true"] {{ background: {ERROR_BG}; color: {ERROR_FG}; }}
+
+QPushButton[seg="true"] {{ color: {DIM}; }}
+QPushButton[seg="true"]:hover {{ color: {TEXT}; background: {BUTTON_HOVER}; }}
+QPushButton[seg="true"]:checked {{ color: {TEXT}; background: {ACTIVE}; }}
+QPushButton[seg="true"]:disabled {{ color: #3A3A3A; background: {BUTTON}; }}
+QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: #1D2526; }}
+
+QPushButton[keycap="true"] {{ color: {DIM}; padding: 0 8px; }}
+QPushButton[keycap="true"]:hover {{ color: {TEXT}; }}
+QPushButton[keycap="true"][capturing="true"] {{ background: {ACTIVE}; color: {TEXT}; }}
+QPushButton[keycap="true"][error="true"] {{ background: {ERROR_BG}; color: {ERROR_FG}; }}
+
+/* No outline: a 1px rounded stroke renders unevenly at 125/150% on Windows.
+   Fields are darker than the window ("recessed"), buttons lighter. */
+QFrame#Field {{
+    background: {FIELD};
+    border: none;
+    border-radius: {RADIUS}px;
+}}
+QFrame#Field[error="true"] {{ background: {ERROR_BG}; }}
+QFrame#Field[seg="first"] {{ border-top-right-radius: 0; border-bottom-right-radius: 0; }}
+QFrame#Field[seg="mid"] {{ border-radius: 0; }}
+QFrame#Field[seg="last"] {{ border-top-left-radius: 0; border-bottom-left-radius: 0; }}
+QFrame#Field QLineEdit {{
+    background: transparent; border: none; padding: 0;
+    selection-background-color: {ACTIVE};
+}}
+QFrame#Field QLineEdit:disabled {{ color: {DIM}; }}
+QFrame#Field[error="true"] QLineEdit {{ color: {ERROR_FG}; }}
+
+QFrame#Panel {{
+    background: {PANEL};
+    border: 1px solid {STROKE};
+    border-radius: {RADIUS}px;
+}}
+QFrame#Toast {{
+    background: {BUTTON};
+    border: 1px solid {STROKE};
+    border-radius: {RADIUS}px;
+}}
+QFrame#Toast QPushButton {{ background: {BUTTON_HOVER}; }}
+QFrame#Toast QPushButton:hover {{ background: #4A4A4A; }}
+
+QMenu {{
+    background: {PANEL};
+    border: 1px solid {STROKE};
+    border-radius: {RADIUS}px;
+    padding: 6px 0;
+}}
+QMenu::item {{ padding: 5px 16px 5px 14px; background: transparent; }}
+QMenu::item:selected {{ background: {BUTTON_HOVER}; }}
+QMenu::item:disabled {{ color: {DIM}; }}
+QMenu::separator {{ height: 1px; background: {STROKE}; margin: 6px 12px; }}
+QMenu::indicator {{ width: 0; }}
+QMenu::right-arrow {{ width: 8px; }}
+
+QToolTip {{
+    background: {BUTTON}; color: {TEXT};
+    border: 1px solid {STROKE}; padding: 4px 6px;
+}}
+QMessageBox QLabel {{ min-width: 280px; }}
+QMessageBox QPushButton {{ min-width: 64px; }}
+"""

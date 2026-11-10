@@ -1,0 +1,25 @@
+ChikChik! bundles the following third-party software.
+Update the versions here when you replace ffmpeg\ or the mpv DLL.
+
+FFmpeg 9.0.2 (gyan.dev "release essentials" build) - GNU GPL v3
+  Files:   ffmpeg\ffmpeg.exe, ffmpeg\ffprobe.exe (run as separate programs)
+  License: licenses\FFmpeg-LICENSE.txt
+  Source:  https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+  Build:   https://www.gyan.dev/ffmpeg/builds/
+
+libmpv 0.42.0 (official x86_64 LGPL build) - GNU LGPL v2.1 or later
+  Files:   mpv-2.dll
+  License: licenses\mpv-LICENSE.LGPL
+  Source:  https://github.com/mpv-player/mpv/releases/tag/v0.42.0
+
+Qt 6 / PySide6 - GNU LGPL v3
+  Source:  https://code.qt.io/  https://pypi.org/project/PySide6/
+
+python-mpv - GNU GPL v2 or later / LGPL v2.1 or later
+  Source:  https://github.com/jaseg/python-mpv
+
+Python - Python Software Foundation License
+  Source:  https://www.python.org/
+
+Inter typeface - SIL Open Font License 1.1
+  License: licenses\LICENSE-Inter.txt
