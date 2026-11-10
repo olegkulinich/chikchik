@@ -119,26 +119,57 @@ def parse_time(text: str) -> float | None:
     return value
 
 
+def _short_track(track) -> str:
+    """T40a: the current track in a few characters — "1 · rus", "None"."""
+    if track is None:
+        return "None"
+    lang = track.language if track.language and track.language != "und" else track.codec
+    return f"{track.number} · {lang}"
+
+
 class MenuRow(QWidget):
     """Menu item with a dim shortcut on the right (QMenu can't color it)."""
 
     def __init__(self, menu: QMenu, text: str, hint: str = "", enabled: bool = True,
                  checked: bool = False, callback=None, check_column: bool = False,
-                 cells: list[tuple[str, int, str, int]] | None = None):
-        """`cells` replaces the right side: (text, fixed width, color or "", gap before)."""
+                 cells: list[tuple[str, int, str, int]] | None = None,
+                 sub: str = "", submenu: bool = False, root: QMenu | None = None):
+        """`cells` replaces the right side: (text, fixed width, color or "", gap before).
+        `sub` — dim text right after the label (Open Recent: the folder).
+        `submenu` — the row opens a submenu (▸, a click doesn't close the menu).
+        `root` — for rows inside a submenu: the top menu, closed too on click."""
         super().__init__()
         self._hover = False
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.setMouseTracking(True)
         self.menu, self.callback, self.enabled = menu, callback, enabled
+        self.submenu, self.root = submenu, root
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 5, 16, 5)
         layout.setSpacing(24)
         label = QLabel(text)
         if not enabled:
             label.setProperty("dim", True)
-        layout.addWidget(label)
+        if sub:                                  # 8 px after the name, not the 24 px column gap
+            left = QHBoxLayout()
+            left.setSpacing(8)
+            left.addWidget(label)
+            left.addWidget(dim_label(sub))
+            layout.addLayout(left)
+        else:
+            layout.addWidget(label)
         layout.addStretch(1)
+        if submenu:
+            right = QHBoxLayout()
+            right.setSpacing(8)
+            if hint:
+                right.addWidget(dim_label(hint))     # the current choice (T40a)
+            arrow = QLabel("▸")
+            if not enabled:
+                arrow.setProperty("dim", True)
+            right.addWidget(arrow)
+            layout.addLayout(right)
+            return
         if cells is not None:
             right = QHBoxLayout()
             right.setSpacing(0)
@@ -179,8 +210,12 @@ class MenuRow(QWidget):
             p.end()
 
     def mouseReleaseEvent(self, event):
+        if self.submenu:
+            return                               # Qt opens the submenu on hover
         if self.enabled and event.button() == Qt.MouseButton.LeftButton:
             self.menu.close()
+            if self.root is not None:
+                self.root.close()
             if self.callback:
                 QTimer.singleShot(0, self.callback)
 
@@ -593,6 +628,7 @@ class MainWindow(QMainWindow):
             "export": lambda: self.export(ask=False),       # T42: like Save
             "export_to": lambda: self.export(ask=True),     # T42: like Save As
             "copy_frame": self.copy_frame,
+            "open_recent": lambda: self.open_recent(),
             "fit": self.zoom_fit,
             "minimize_ui": self.toggle_minimize_ui,
             "hide_ui": self.toggle_hide_ui,
@@ -706,10 +742,10 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _menu_choice(menu: QMenu, text: str, checked: bool, callback, enabled: bool = True,
-                     hint: str = "", check_column: bool = False) -> None:
+                     hint: str = "", check_column: bool = False, root: QMenu | None = None) -> None:
         action = QWidgetAction(menu)
         action.setDefaultWidget(MenuRow(menu, text, hint, enabled, checked=checked,
-                                        callback=callback, check_column=check_column))
+                                        callback=callback, check_column=check_column, root=root))
         menu.addAction(action)
 
     def show_menu(self, pos) -> None:
@@ -724,10 +760,20 @@ class MainWindow(QMainWindow):
                                             callback=self._menu_handlers[key]))
             menu.addAction(action)
 
+        def submenu_row(title: str, hint: str, sub: QMenu, enabled: bool = True):
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(MenuRow(menu, title, hint, enabled, submenu=True))
+            action.setEnabled(enabled)
+            if enabled:
+                action.setMenu(sub)
+            menu.addAction(action)
+
         row("hotkeys")
         row("settings")
         menu.addSeparator()
         row("open", self.worker is None)
+        submenu_row("Open Recent", "", self._recent_menu(menu),               # T40
+                    enabled=self.worker is None and bool(self._recent()))
         row("copy_frame", self.info is not None)
         row("export", loaded)                                               # T42
         row("export_to", loaded)
@@ -743,20 +789,24 @@ class MainWindow(QMainWindow):
         row("minimize_ui", title="Restore UI" if self._ui_mode == "minimal" else "Minimize UI")
         row("hide_ui", title="Show UI" if self._ui_mode == "hidden" else "Hide UI")
         if self.info is not None:
+            # T40a: tracks in submenus (films can carry 20 subtitle tracks); the row shows
+            # the current choice
             idle = self.worker is None
             menu.addSeparator()
-            self._menu_header(menu, "Audio Track")
+            audio = self._new_menu()
             tracks: list[AudioTrack | None] = [*self.info.audio, None]
             for track in tracks:
-                self._menu_choice(menu, track.label() if track else "None", track == self.audio,
-                                  lambda t=track: self.set_audio(t), idle)
+                self._menu_choice(audio, track.label() if track else "None", track == self.audio,
+                                  lambda t=track: self.set_audio(t), idle, root=menu)
+            submenu_row("Audio Track", _short_track(self.audio), audio)
             if self.info.subtitles:
-                menu.addSeparator()
-                self._menu_header(menu, "Subtitles")
+                subs_menu = self._new_menu()
                 subs: list[SubtitleTrack | None] = [None, *self.info.subtitles]
                 for sub in subs:
-                    self._menu_choice(menu, sub.label() if sub else "None", sub == self.subtitle,
-                                      lambda s=sub: self.set_subtitle(s), idle)
+                    self._menu_choice(subs_menu, sub.label() if sub else "None",
+                                      sub == self.subtitle, lambda s=sub: self.set_subtitle(s),
+                                      idle, root=menu)
+                submenu_row("Subtitles", _short_track(self.subtitle), subs_menu)
         menu.addSeparator()
         row("quit")
         menu.setMinimumWidth(200)
@@ -764,6 +814,44 @@ class MainWindow(QMainWindow):
 
     def contextMenuEvent(self, event) -> None:
         self.show_menu(event.globalPos())
+
+    # ====================================================== recent (T40)
+    RECENT_SHOWN = 5
+
+    def _recent(self) -> list[Path]:
+        """Recent files, newest first, without the open one."""
+        current = self.source
+        items = [Path(p) for p in self.config.recent()]
+        return [p for p in items if current is None or not same_path(p, current)][:self.RECENT_SHOWN]
+
+    def _recent_menu(self, root: QMenu) -> QMenu:
+        sub = self._new_menu()
+        metrics = QFontMetrics(self.font())
+        for i, path in enumerate(self._recent()):
+            folder = metrics.elidedText(str(path.parent), Qt.TextElideMode.ElideMiddle, 260)
+            action = QWidgetAction(sub)
+            action.setDefaultWidget(MenuRow(
+                sub, path.name, display_key(MENU_SHORTCUTS["open_recent"][1]) if i == 0 else "",
+                callback=lambda p=path: self.open_recent(p), sub=folder, root=root))
+            sub.addAction(action)
+        return sub
+
+    def open_recent(self, path: Path | None = None) -> None:
+        """Ctrl+Shift+O opens the top one — the previous file, so pressing it again
+        switches between the last two."""
+        if self.worker is not None:
+            return
+        if path is None:
+            items = self._recent()
+            if not items:
+                return
+            path = items[0]
+        if not path.exists():
+            self.config.remove_recent(str(path))
+            self.toast.show_message(f"File not found: {path.name}", action=False, error=True,
+                                    ms=4000)
+            return
+        self.open_path(path)
 
     # ============================================================= files
     def open_dialog(self) -> None:
@@ -811,6 +899,7 @@ class MainWindow(QMainWindow):
         self._update_enabled()
         self._update_loop()
         self._history_reset()                                              # T32
+        self.config.push_recent(str(path))                                 # T40
         self.video.setFocus()
 
     def set_audio(self, track: AudioTrack | None) -> None:

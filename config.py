@@ -70,6 +70,7 @@ MENU_SHORTCUTS = {
     "hotkeys": ("Hotkeys", "Ctrl+/"),
     "settings": ("Settings", "Ctrl+K"),
     "open": ("Open", "Ctrl+O"),
+    "open_recent": ("Open Recent", "Ctrl+Shift+O"),   # T40: the top recent file
     "export": ("Export", "Ctrl+E"),                # T42: "Export to…" when Save To = Ask
     "export_to": ("Export to…", "Ctrl+Shift+E"),   # T42: always asks where
     "copy_frame": ("Copy Frame", "Ctrl+C"),   # T19a
@@ -165,6 +166,23 @@ class Config(QObject):
             if QKeySequence(key) == wanted:
                 return title
         return ""
+
+    # --- recent files (T40)
+    RECENT_KEPT = 6          # 5 shown + the open one
+
+    def recent(self) -> list[str]:
+        value = self._store.value("window/recent", [])
+        if isinstance(value, str):           # QSettings returns a bare str for one item
+            value = [value]
+        return [str(v) for v in (value or []) if v]
+
+    def push_recent(self, path: str) -> None:
+        items = [path] + [p for p in self.recent() if p.lower() != path.lower()]
+        self._store.setValue("window/recent", items[:self.RECENT_KEPT])
+
+    def remove_recent(self, path: str) -> None:
+        self._store.setValue("window/recent",
+                             [p for p in self.recent() if p.lower() != path.lower()])
 
     # --- window
     def ui_mode(self) -> str:
