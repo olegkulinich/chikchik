@@ -6,10 +6,12 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QProcess, QRect, Qt, QTimer, QUrl
+from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QProcess, QPropertyAnimation,
+                            QRect, Qt, QTimer, QUrl)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
+    QCursor,
     QDesktopServices,
     QFontMetrics,
     QImage,
@@ -19,11 +21,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QSpacerItem,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -246,11 +250,31 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(theme.emoji_icon())
         self.setAcceptDrops(True)
         self.setMinimumHeight(420)  # min width comes from the bottom row (~960 px)
-        self.resize(1100, 720)
-        if self.config.geometry() is not None:
-            self.restoreGeometry(self.config.geometry())
+        # T22 fullscreen: panels float over the video and show on hover
+        self._ui_ready = False
+        self._fullscreen = False
+        self._window_geometry = None        # saveGeometry() from before fullscreen
+        self._was_maximized = False
+        self._overlay = False
+        self._overlay_shown = True
+        self._fade: QPropertyAnimation | None = None
+        self._press_origin = ""             # "video" | "panel" while a button is held
+        self._cursor_hidden = False
+        self._cursor_pos = QPoint()
+        self._cursor_still_since = time.monotonic()
+        self._rmb_press: QPoint | None = None
+        self._rmb_dragging = False
+        self._drag_offset = QPoint()
 
         self._build_ui()
+        # T22, Windows: an OpenGL window covering the whole monitor gets a DWM mode in
+        # which menus and dialogs open *behind* it. Qt's own fix — a 1 px border in
+        # fullscreen — is read from this property when the native window is created.
+        # The QWindow is replaced once the OpenGL video is embedded, so tag it after
+        # _build_ui (WA_NativeWindow makes the QWindow without creating the native one).
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+        if self.windowHandle() is not None:
+            self.windowHandle().setProperty("_q_has_border_in_fullscreen", True)
         self.settings_popover = SettingsPopover(self.config, self)
         self.hotkeys_popover = HotkeysPopover(self.config, self)
         self._install_menu_actions()
@@ -284,6 +308,12 @@ class MainWindow(QMainWindow):
         self._history_timer.timeout.connect(self._history_commit)
 
         self._update_enabled()
+        self._ui_ready = True
+        self.resize(1100, 720)
+        if self.config.geometry() is not None:
+            self.restoreGeometry(self.config.geometry())
+            if self.windowState() & Qt.WindowState.WindowFullScreen:   # never start fullscreen
+                self.setWindowState(self.windowState() & ~Qt.WindowState.WindowFullScreen)
         theme.dark_title_bar(self)
 
     # ================================================================ UI
@@ -298,9 +328,24 @@ class MainWindow(QMainWindow):
         self.video.crop_drawn.connect(self._crop_drawn)
         self.video.menu_requested.connect(self.show_menu)
         root.addWidget(self.video, 1)
-        root.addSpacing(theme.GAP)
+        self._video_gap = QSpacerItem(0, theme.GAP)
+        root.addItem(self._video_gap)
+        self._root = root
+        self._central = central
 
-        transport = QHBoxLayout()
+        # T22: both rows live in one widget — under the video in the window, floating
+        # over it (shown on hover) in fullscreen.
+        self.panels = QWidget(central)
+        self.panels.setObjectName("Panels")
+        self.panels.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        panels_layout = QVBoxLayout(self.panels)
+        panels_layout.setContentsMargins(0, 0, 0, 0)
+        panels_layout.setSpacing(theme.GAP2)
+        self._panels_layout = panels_layout
+
+        self.transport_bar = QWidget()
+        transport = QHBoxLayout(self.transport_bar)
+        transport.setContentsMargins(0, 0, 0, 0)
         transport.setSpacing(theme.HGAP)
         self.play_button = PlayButton()
         self.play_button.clicked.connect(lambda: (self.toggle_play(), self._sync_play()))
@@ -324,10 +369,11 @@ class MainWindow(QMainWindow):
         transport.addWidget(self.loop_button)
         transport.addWidget(self.timeline, 1)
         transport.addWidget(self.time_field)
-        root.addLayout(transport)
-        root.addSpacing(theme.GAP2)
+        panels_layout.addWidget(self.transport_bar)
 
-        bottom = QHBoxLayout()
+        self.bottom_bar = QWidget()
+        bottom = QHBoxLayout(self.bottom_bar)
+        bottom.setContentsMargins(0, 0, 0, 0)
         bottom.setSpacing(theme.HGAP)
         self.trim_button = button("Trim", checkable=True,
                                   tooltip="Export only the In–Out range (off: the whole file)")
@@ -384,7 +430,8 @@ class MainWindow(QMainWindow):
         self.export_button.setMinimumWidth(64)
         self.export_button.clicked.connect(self._export_clicked)
         bottom.addWidget(self.export_button)
-        root.addLayout(bottom)
+        panels_layout.addWidget(self.bottom_bar)
+        root.addWidget(self.panels)
 
         for field in (self.time_field, self.in_field, self.out_field, self.d_field, self.fps_field,
                       *self.crop_fields.values()):
@@ -410,7 +457,6 @@ class MainWindow(QMainWindow):
             "open": self.open_dialog,
             "export": lambda: self.export(ask=False),       # T42: like Save
             "export_to": lambda: self.export(ask=True),     # T42: like Save As
-            "overwrite": self.overwrite,
             "copy_frame": self.copy_frame,
             "fit": self.zoom_fit,
             "actual_size": self.zoom_actual,
@@ -425,7 +471,24 @@ class MainWindow(QMainWindow):
         self._menu_handlers = handlers
 
     def eventFilter(self, obj, event):  # noqa: N802
-        """T1: pressing anywhere outside the field being edited applies it (as Enter)."""
+        """T1: pressing anywhere outside the field being edited applies it (as Enter).
+        T22b/c: remember where a press started — panels stay or stay away meanwhile."""
+        kind = event.type()
+        if kind == QEvent.Type.Resize and obj is getattr(self, "_central", None):
+            self._place_overlay()
+        in_window = isinstance(obj, QWidget) and obj.window() is self
+        if in_window and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
+                                  QEvent.Type.MouseButtonRelease) and self._rmb_event(obj, event):
+            return True
+        if in_window and kind == QEvent.Type.ContextMenu \
+                and event.reason() == event.Reason.Mouse:
+            return True                    # the menu opens on release, in _rmb_event
+        if kind == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget) \
+                and obj.window() is self and not self._press_origin:
+            on_panels = obj is self.panels or self.panels.isAncestorOf(obj)
+            self._press_origin = "panel" if on_panels else "video"
+        elif kind == QEvent.Type.MouseButtonRelease and not event.buttons():
+            self._press_origin = ""
         if event.type() == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget):
             focused = QApplication.focusWidget()
             if isinstance(focused, _FieldEdit):
@@ -452,6 +515,7 @@ class MainWindow(QMainWindow):
             "sec5_prev": lambda: self.video.seek_relative(-5.0),
             "play": self.toggle_play,
             "loop": lambda: self.loop_button.toggle() if self.info is not None else None,
+            "fullscreen": self.toggle_fullscreen,                         # T22
             "go_start": lambda: self._go_to(start=True),
             "go_end": lambda: self._go_to(start=False),
             "undo": self.undo,
@@ -512,14 +576,17 @@ class MainWindow(QMainWindow):
         row("settings")
         menu.addSeparator()
         row("open", self.worker is None)
+        row("copy_frame", self.info is not None)
         row("export", loaded)                                               # T42
         row("export_to", loaded)
-        row("overwrite", loaded)
-        row("copy_frame", self.info is not None)
         menu.addSeparator()                                                 # T29
         self._menu_header(menu, "View")
         row("fit", self.info is not None)
         row("actual_size", self.info is not None)
+        # Toggles name what a click will do (Fullscreen ↔ Exit Fullscreen) — no checkmarks
+        self._menu_choice(menu, "Exit Fullscreen" if self._fullscreen else "Fullscreen", False,
+                          self.toggle_fullscreen, hint=display_key(self.config.hotkey("fullscreen")),
+                          check_column=False)
         if self.info is not None:
             idle = self.worker is None
             menu.addSeparator()
@@ -622,6 +689,7 @@ class MainWindow(QMainWindow):
         self._poll_inner()
 
     def _poll_inner(self) -> None:
+        self._update_overlay()
         self._sync_play()
         if self.info is None:
             return
@@ -1331,6 +1399,202 @@ class MainWindow(QMainWindow):
         kind = self._kind()
         return {"mp4": ".mp4", "gif": ".gif"}.get(kind, self.source.suffix.lower())
 
+    # ==================================================== fullscreen (T22)
+    def toggle_fullscreen(self) -> None:
+        """F only. Fullscreen opens on the window's monitor; leaving restores
+        maximized or normal, as it was."""
+        if self._fullscreen:
+            self._leave_fullscreen(restore_maximized=True)
+        else:
+            self._was_maximized = self.isMaximized()
+            self._window_geometry = self.saveGeometry()
+            self._fullscreen = True
+            self.showFullScreen()
+        self._apply_layout()
+
+    def _leave_fullscreen(self, restore_maximized: bool) -> None:
+        self._fullscreen = False
+        if restore_maximized and self._was_maximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self._apply_layout()
+
+    # ------------------------------------------------ right-button drag (PureRef)
+    RMB_DRAG = 5             # px before a right press moves the window instead of the menu
+
+    def _rmb_event(self, obj, event) -> bool:
+        """Right button anywhere in the window: click → menu, drag → move the window.
+        Dragging out of fullscreen (or a maximized window) restores it under the cursor."""
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
+            self._rmb_press = event.globalPosition().toPoint()
+            self._rmb_dragging = False
+            return True
+        if self._rmb_press is None:
+            return False
+        if kind == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.RightButton:
+            pos = event.globalPosition().toPoint()
+            if not self._rmb_dragging:
+                if (pos - self._rmb_press).manhattanLength() < self.RMB_DRAG:
+                    return True
+                self._start_window_drag(self._rmb_press)
+            self.move(pos - self._drag_offset)
+            return True
+        if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
+            press, dragging = self._rmb_press, self._rmb_dragging
+            self._rmb_press, self._rmb_dragging = None, False
+            if not dragging:
+                self.show_menu(press)
+            return True
+        return False
+
+    def _start_window_drag(self, press: QPoint) -> None:
+        self._rmb_dragging = True
+        frame = self.frameGeometry()
+        rel_x = (press.x() - frame.x()) / max(1, frame.width())
+        offset_y = press.y() - frame.y()
+        if self._fullscreen or self.isMaximized():
+            # like dragging a maximized window's title bar: keep the cursor at the same
+            # relative spot of the restored window
+            if self._fullscreen:
+                self._leave_fullscreen(restore_maximized=False)
+            else:
+                self.showNormal()
+            normal = self.normalGeometry()
+            offset_y = min(offset_y, max(0, normal.height() - 40))
+            self._drag_offset = QPoint(round(rel_x * normal.width()), offset_y)
+            self.move(press - self._drag_offset)
+        else:
+            self._drag_offset = press - frame.topLeft()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if not getattr(self, "_ui_ready", False):
+            return
+        if event.type() == QEvent.Type.WindowStateChange and self._fullscreen \
+                and not self.isFullScreen() and not self.isMinimized():
+            self._fullscreen = False            # left by the system (e.g. Win+↓)
+            self._apply_layout()
+
+    def _apply_layout(self) -> None:
+        """Window: panels under the video. Fullscreen: video fills the screen, panels
+        float over its bottom (16 px from the sides and the bottom, 22d)."""
+        overlay = self._fullscreen
+        if overlay == self._overlay:
+            self._place_overlay()
+            return
+        self._overlay = overlay
+        if overlay:
+            self._root.setContentsMargins(0, 0, 0, 0)
+            self._video_gap.changeSize(0, 0)
+            self._root.removeWidget(self.panels)
+            self._panels_layout.setContentsMargins(theme.GAP2, theme.GAP, theme.GAP2, theme.GAP2)
+            theme.set_flag(self.panels, "overlay", True)
+            self._overlay_shown = True
+            self._set_overlay_shown(False, animate=False)
+        else:
+            self._stop_fade()
+            self._root.setContentsMargins(theme.GAP, 0, theme.GAP, theme.GAP2)
+            self._video_gap.changeSize(0, theme.GAP)
+            self._panels_layout.setContentsMargins(0, 0, 0, 0)
+            theme.set_flag(self.panels, "overlay", False)
+            self._root.addWidget(self.panels)
+            self.panels.show()
+            self._overlay_shown = True
+            self._show_cursor()
+        self._root.invalidate()
+        self._place_overlay()
+
+    def _place_overlay(self) -> None:
+        if not self._overlay:
+            return
+        central = self._central
+        height = self.panels.sizeHint().height()
+        self.panels.setGeometry(0, central.height() - height, central.width(), height)
+        self.panels.raise_()
+        self.toast.raise_()
+
+    HYSTERESIS = 24          # px the cursor may stray above the shown panels (22a)
+    CURSOR_HIDE_S = 1.5      # fullscreen: hide a still cursor
+
+    def _update_overlay(self) -> None:
+        """Called from the poll (30 ms): hover → show at once, leave → fade out."""
+        if not self._overlay:
+            return
+        global_pos = QCursor.pos()
+        pos = self._central.mapFromGlobal(global_pos)
+        zone = self.panels.geometry()
+        if self._overlay_shown:
+            zone = zone.adjusted(0, -self.HYSTERESIS, 0, 0)
+        held = bool(QApplication.mouseButtons())
+        if held and self._press_origin == "video":
+            want = False                                   # 22b: crop / pan drag
+        elif held and self._press_origin == "panel":
+            want = True                                    # 22c: playhead, edges, scrub
+        else:
+            focus = QApplication.focusWidget()
+            busy = QApplication.activePopupWidget() is not None and self._overlay_shown
+            editing = focus is not None and self.panels.isAncestorOf(focus) \
+                and isinstance(focus, _FieldEdit)
+            want = zone.contains(pos) or busy or editing
+        if want != self._overlay_shown:
+            self._set_overlay_shown(want, animate=not want)
+        self._update_cursor(global_pos, held)
+
+    def _set_overlay_shown(self, shown: bool, animate: bool) -> None:
+        self._overlay_shown = shown
+        self._stop_fade()
+        if shown:
+            self.panels.show()                             # appears without animation
+            self._place_overlay()
+            return
+        if not animate:
+            self.panels.hide()
+            return
+        effect = QGraphicsOpacityEffect(self.panels)
+        self.panels.setGraphicsEffect(effect)
+        fade = QPropertyAnimation(effect, b"opacity", self)
+        fade.setDuration(100)
+        fade.setStartValue(1.0)
+        fade.setEndValue(0.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutQuad)
+        fade.finished.connect(self._fade_done)
+        self._fade = fade
+        fade.start()
+
+    def _fade_done(self) -> None:
+        self._fade = None
+        self.panels.setGraphicsEffect(None)
+        if not self._overlay_shown:
+            self.panels.hide()
+
+    def _stop_fade(self) -> None:
+        if self._fade is not None:
+            fade, self._fade = self._fade, None
+            fade.stop()
+            self.panels.setGraphicsEffect(None)
+
+    def _update_cursor(self, global_pos: QPoint, held: bool) -> None:
+        """Fullscreen: a still cursor over the video hides after 1.5 s; any move shows it."""
+        now = time.monotonic()
+        if global_pos != self._cursor_pos:
+            self._cursor_pos = QPoint(global_pos)
+            self._cursor_still_since = now
+            self._show_cursor()
+            return
+        if (self._fullscreen and not self._cursor_hidden and not held
+                and not self._overlay_shown and QApplication.activePopupWidget() is None
+                and self.isActiveWindow()
+                and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
+            QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+            self._cursor_hidden = True
+
+    def _show_cursor(self) -> None:
+        if self._cursor_hidden:
+            self._cursor_hidden = False
+            QApplication.restoreOverrideCursor()
+
     # ========================================================= zoom (T20)
     def zoom_fit(self) -> None:
         if self.info is not None:
@@ -1363,7 +1627,7 @@ class MainWindow(QMainWindow):
         default = self.source.with_name(f"{self.source.stem}.cut{suffix}")
 
         if not ask:
-            self._start_export(unique_path(default), backup=False)
+            self._start_export(unique_path(default))
             return
 
         file_filter = {
@@ -1387,31 +1651,10 @@ class MainWindow(QMainWindow):
             self._error("Export", f"Original keeps the source container ({self.source.suffix}).")
             return
         if same_path(output, self.source):
-            self.overwrite()
+            # Export never replaces the source — export, then delete it by hand.
+            self._error("Export", "Choose another name — Export never replaces the source.")
             return
-        self._start_export(output.resolve(), backup=False)
-
-    def overwrite(self) -> None:
-        if self.info is None or self.worker is not None:
-            return
-        kind = self._kind()
-        if kind in ("gif", "png"):
-            what = "A GIF" if kind == "gif" else "A PNG sequence"
-            self._error("Overwrite", f"{what} can't replace the source video.\nUse Export instead.")
-            return
-        if kind == "mp4" and self.source.suffix.lower() not in PRECISE_CONTAINERS:
-            self._error(
-                "Overwrite",
-                f"Re-encoding can't write H.264 into {self.source.suffix}.\nUse Export instead.",
-            )
-            return
-        answer = QMessageBox.question(
-            self, "Overwrite source?",
-            "The source file is replaced only after the export succeeds and is verified.\n\n"
-            "The original is kept next to it as name.backup-YYYYMMDD-HHMMSS.ext\n\nContinue?",
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._start_export(self.source, backup=True)
+        self._start_export(output.resolve())
 
     def _trim_range(self) -> tuple[float, float]:
         """(start, duration). Trim off → the whole file; Out frame is included."""
@@ -1421,7 +1664,7 @@ class MainWindow(QMainWindow):
         start = self.trim_in
         return start, min(self.trim_out - start + info.frame_duration, info.duration - start)
 
-    def _start_export(self, output: Path, backup: bool) -> None:
+    def _start_export(self, output: Path) -> None:
         info = self.info
         kind = self._kind()
         start, duration = self._trim_range()
@@ -1443,7 +1686,7 @@ class MainWindow(QMainWindow):
                 start=start, duration=duration, crop=self._effective_crop(),
                 fast=kind == "copy",
                 crf=self.config.crf, preset=self.config.preset,
-                audio=self.audio if kind != "gif" else None, backup_original=backup,
+                audio=self.audio if kind != "gif" else None,
                 subtitle=self.subtitle, scale=self.scale,
                 fps=self._target_fps(), kind=kind,
                 palette=palette_path(output) if kind == "gif" else None,
@@ -1501,29 +1744,19 @@ class MainWindow(QMainWindow):
             return
 
         position = self._position()
-        if job.backup_original:
-            self.video.unload()   # release the file handle before renaming
         try:
-            backup = commit_output(job.temporary_output, job.final_output, job.backup_original)
+            commit_output(job.temporary_output, job.final_output)
         except Exception as exc:
             # Keep the finished temp file — the export itself succeeded.
             self._error(
                 "Could not move the result into place",
                 f"{exc}\n\nThe exported file is kept here:\n{job.temporary_output}",
             )
-            if job.backup_original:
-                self.open_path(job.source)
             return
 
-        if job.backup_original:
-            self.open_path(job.final_output)
-            self.toast.show_message(
-                f"Overwritten · backup: {backup.name}", action=True)
-            self._toast_path = backup
-        else:
-            self.toast.show_message(f"Saved: {job.final_output.name}", action=True)
-            self._toast_path = job.final_output
-            self.video.seek(position)
+        self.toast.show_message(f"Saved: {job.final_output.name}", action=True)
+        self._toast_path = job.final_output
+        self.video.seek(position)
         self.config.set("last_format", job.kind)      # T25: Last Used
 
     # --------------------------------------------------------- PNG (T19b)
@@ -1541,7 +1774,7 @@ class MainWindow(QMainWindow):
             if not chosen:
                 return
             folder = Path(chosen)
-        self._start_export(folder, backup=False)
+        self._start_export(folder)
 
     @staticmethod
     def _png_frames(job: ExportJob) -> list[Path]:
@@ -1647,7 +1880,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if self.toast.isVisible():
+        if getattr(self, "_ui_ready", False) and self.toast.isVisible():
             self.toast.reposition()
 
     def dragEnterEvent(self, event) -> None:
@@ -1671,7 +1904,10 @@ class MainWindow(QMainWindow):
                 self._remove(self.job.temporary_output)
                 if self.job.palette is not None:
                     self._remove(self.job.palette)
-        self.config.set_geometry(self.saveGeometry())
+        if self._fullscreen and self._window_geometry is not None:
+            self.config.set_geometry(self._window_geometry)   # T22: fullscreen isn't remembered
+        else:
+            self.config.set_geometry(self.saveGeometry())
         self.poll.stop()
         self.video.shutdown()
         event.accept()

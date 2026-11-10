@@ -8,7 +8,6 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -131,7 +130,6 @@ class ExportJob:
     crf: int
     preset: str
     audio: AudioTrack | None
-    backup_original: bool
     subtitle: SubtitleTrack | None = None
     scale: float = 1.0
     fps: float | None = None          # output frame rate; None = keep the source rate
@@ -604,11 +602,6 @@ def unique_path(path: Path) -> Path:
     return candidate
 
 
-def unique_backup_path(source: Path) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return unique_path(source.with_name(f"{source.stem}.backup-{timestamp}{source.suffix}"))
-
-
 def replace_with_retry(source: Path, target: Path, attempts: int = 15, delay: float = 0.2) -> None:
     """os.replace that waits for players / antivirus / Dropbox to release the file."""
     for attempt in range(attempts):
@@ -621,27 +614,9 @@ def replace_with_retry(source: Path, target: Path, attempts: int = 15, delay: fl
             time.sleep(delay)
 
 
-def commit_output(temporary: Path, target: Path, backup_original: bool) -> Path | None:
+def commit_output(temporary: Path, target: Path) -> None:
     """Move the verified file into place. Raises if it fails; temp file is kept."""
-    if not backup_original:
-        replace_with_retry(temporary, target)
-        return None
-
-    backup = unique_backup_path(target)
-    replace_with_retry(target, backup)
-    try:
-        replace_with_retry(temporary, target)
-    except Exception as original_error:
-        try:
-            replace_with_retry(backup, target)
-        except Exception as rollback_error:
-            raise RuntimeError(
-                "Could not install the new file or restore the original.\n"
-                f"Original is saved here: {backup}\n"
-                f"Restore error: {rollback_error}"
-            ) from rollback_error
-        raise original_error
-    return backup
+    replace_with_retry(temporary, target)
 
 
 # -------------------------------------------------------------- worker
