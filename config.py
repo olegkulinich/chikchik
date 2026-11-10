@@ -75,8 +75,15 @@ MENU_SHORTCUTS = {
     "copy_frame": ("Copy Frame", "Ctrl+C"),   # T19a
     "fit": ("Fit", "Ctrl+0"),                 # T20
     "actual_size": ("Actual Size", "Ctrl+1"), # T20
+    "minimize_ui": ("Minimize UI", "Ctrl+Shift+\\"),   # T27
+    "hide_ui": ("Hide UI", "Ctrl+\\"),                  # T27
     "quit": ("Quit", "Ctrl+Q"),
 }
+
+# Extra key spellings for menu shortcuts (Shift+\ is reported as | on some layouts).
+MENU_ALIASES = {"minimize_ui": ("Ctrl+|", "Ctrl+Shift+|")}
+
+UI_MODES = ("normal", "minimal", "hidden")
 
 _ARROWS = {"Left": "←", "Right": "→", "Up": "↑", "Down": "↓"}
 
@@ -160,6 +167,14 @@ class Config(QObject):
         return ""
 
     # --- window
+    def ui_mode(self) -> str:
+        """T27: normal | minimal (Minimize UI) | hidden (Hide UI) — remembered."""
+        value = str(self._store.value("window/ui_mode", "normal"))
+        return value if value in UI_MODES else "normal"
+
+    def set_ui_mode(self, mode: str) -> None:
+        self._store.setValue("window/ui_mode", mode)
+
     def geometry(self):
         return self._store.value("window/geometry")
 

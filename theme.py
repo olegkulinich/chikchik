@@ -153,6 +153,13 @@ QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: {ACTIVE}; 
 
 QPushButton[keycap="true"] {{ color: {DIM}; padding: 0 8px; }}
 QWidget#Panels[overlay="true"] {{ background: {WINDOW}; }}
+QWidget#TitleStrip {{ background: {WINDOW}; }}
+QPushButton#TitleButton, QPushButton#TitleClose {{
+    background: transparent; border: none; border-radius: 0; padding: 0; color: {DIM};
+    min-height: 32px; max-height: 32px;
+}}
+QPushButton#TitleButton:hover {{ background: {BUTTON_HOVER}; color: {TEXT}; }}
+QPushButton#TitleClose:hover {{ background: #C42B1C; color: #FFFFFF; }}
 QScrollArea#HotkeysScroll, QScrollArea#HotkeysScroll > QWidget > QWidget {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {BUTTON_HOVER}; border-radius: 3px; min-height: 24px; }}

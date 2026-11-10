@@ -13,6 +13,8 @@ from PySide6.QtGui import (
     QCloseEvent,
     QCursor,
     QDesktopServices,
+    QFont,
+    QFontDatabase,
     QFontMetrics,
     QImage,
     QKeySequence,
@@ -27,6 +29,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPushButton,
+    QSizePolicy,
     QSpacerItem,
     QVBoxLayout,
     QWidget,
@@ -36,6 +40,7 @@ from PySide6.QtWidgets import (
 import perf_log
 from version import APP_NAME
 import theme
+import win_frame
 from backend import (
     PRECISE_CONTAINERS,
     SCALES,
@@ -62,7 +67,7 @@ from backend import (
     unique_path,
     validate_video,
 )
-from config import FORMAT_HOTKEYS, MENU_SHORTCUTS, SCALE_HOTKEYS, Config, display_key
+from config import FORMAT_HOTKEYS, MENU_ALIASES, MENU_SHORTCUTS, SCALE_HOTKEYS, Config, display_key
 from popovers import HotkeysPopover, SettingsPopover
 from video_view import VideoView
 from widgets import (
@@ -180,6 +185,130 @@ class MenuRow(QWidget):
                 QTimer.singleShot(0, self.callback)
 
 
+class _Reveal:
+    """A bar shown on hover (22a): appears at once, fades out in 100 ms when the cursor
+    leaves; `HYSTERESIS` px of slack on the video side once shown."""
+
+    HYSTERESIS = 24
+
+    def __init__(self, owner: QWidget, widget: QWidget, name: str, side: str, shown: bool):
+        self.owner, self.widget, self.name, self.side = owner, widget, name, side
+        self.shown = shown
+        self.active = False
+        self._fade: QPropertyAnimation | None = None
+
+    def zone(self) -> QRect:
+        rect = self.widget.geometry()
+        if self.shown:
+            rect = rect.adjusted(0, -self.HYSTERESIS, 0, 0) if self.side == "bottom" \
+                else rect.adjusted(0, 0, 0, self.HYSTERESIS)
+        return rect
+
+    def set_shown(self, shown: bool, animate: bool) -> None:
+        self.shown = shown
+        self._stop()
+        if shown:
+            self.widget.show()                           # appears without animation
+            return
+        if not animate:
+            self.widget.hide()
+            return
+        effect = QGraphicsOpacityEffect(self.widget)
+        self.widget.setGraphicsEffect(effect)
+        fade = QPropertyAnimation(effect, b"opacity", self.owner)
+        fade.setDuration(100)
+        fade.setStartValue(1.0)
+        fade.setEndValue(0.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutQuad)
+        fade.finished.connect(self._done)
+        self._fade = fade
+        fade.start()
+
+    def _done(self) -> None:
+        self._fade = None
+        self.widget.setGraphicsEffect(None)
+        if not self.shown:
+            self.widget.hide()
+
+    def _stop(self) -> None:
+        if self._fade is not None:
+            fade, self._fade = self._fade, None
+            fade.stop()
+            self.widget.setGraphicsEffect(None)
+
+    @property
+    def fading(self) -> bool:
+        return self._fade is not None
+
+
+class _TitleStrip(QWidget):
+    """T27 Hide UI: the title bar, shown on hover over the top edge. On Windows the
+    strip is the native caption (WM_NCHITTEST) — snap, double-click maximize."""
+
+    HEIGHT = 32
+    BUTTON_W = 46
+
+    def __init__(self, window: QMainWindow, parent: QWidget):
+        super().__init__(parent)
+        self.window_ = window
+        self.setObjectName("TitleStrip")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 0, 0)
+        layout.setSpacing(8)
+        icon = QLabel()
+        icon.setPixmap(theme.emoji_icon().pixmap(16, 16))
+        layout.addWidget(icon)
+        self.title = dim_label(window.windowTitle())
+        self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.title, 1)
+        window.windowTitleChanged.connect(self.title.setText)
+        families = QFontDatabase.families()
+        self._glyph_font = next((f for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets")
+                                 if f in families), "")
+        self.buttons = []
+        for name, glyph, fallback, slot in (
+                ("TitleButton", "\uE921", "—", window.showMinimized),
+                ("TitleButton", "\uE922", "□", self._toggle_maximized),
+                ("TitleClose", "\uE8BB", "✕", window.close)):
+            b = QPushButton(glyph if self._glyph_font else fallback)
+            b.setObjectName(name)
+            b.setFixedSize(self.BUTTON_W, self.HEIGHT)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            if self._glyph_font:
+                font = QFont(self._glyph_font)
+                font.setPixelSize(10)
+                b.setFont(font)
+            b.clicked.connect(slot)
+            layout.addWidget(b)
+            self.buttons.append(b)
+        self.hide()
+
+    def _toggle_maximized(self) -> None:
+        w = self.window_
+        w.showNormal() if w.isMaximized() else w.showMaximized()
+
+    def sync(self) -> None:
+        """Maximize ↔ restore glyph."""
+        maximized = self.window_.isMaximized()
+        if self._glyph_font:
+            self.buttons[1].setText("\uE923" if maximized else "\uE922")
+        else:
+            self.buttons[1].setText("❐" if maximized else "□")
+
+    def over_button(self, local: QPoint) -> bool:
+        return any(b.geometry().contains(local) for b in self.buttons)
+
+    # Elsewhere than Windows the strip isn't a native caption — move/maximize by hand.
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.window_.windowHandle():
+            self.window_.windowHandle().startSystemMove()
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._toggle_maximized()
+
+
 class _Central(QWidget):
     """Presses in the margin around the video start a crop frame too (1.9b) —
     matters when the picture fills the whole width and there are no black bars."""
@@ -256,8 +385,8 @@ class MainWindow(QMainWindow):
         self._window_geometry = None        # saveGeometry() from before fullscreen
         self._was_maximized = False
         self._overlay = False
-        self._overlay_shown = True
-        self._fade: QPropertyAnimation | None = None
+        self._ui_mode = self.config.ui_mode()      # T27: normal | minimal | hidden
+        self._frame_hidden = False
         self._press_origin = ""             # "video" | "panel" while a button is held
         self._cursor_hidden = False
         self._cursor_pos = QPoint()
@@ -315,6 +444,7 @@ class MainWindow(QMainWindow):
             if self.windowState() & Qt.WindowState.WindowFullScreen:   # never start fullscreen
                 self.setWindowState(self.windowState() & ~Qt.WindowState.WindowFullScreen)
         theme.dark_title_bar(self)
+        self._apply_layout()                     # T27: the remembered UI mode
 
     # ================================================================ UI
     def _build_ui(self) -> None:
@@ -443,6 +573,11 @@ class MainWindow(QMainWindow):
         self.toast.action_clicked.connect(self._show_in_folder)
         self._toast_path: Path | None = None
 
+        # T22/T27: bars shown on hover
+        self.title_strip = _TitleStrip(self, central)
+        self._panels_reveal = _Reveal(self, self.panels, "panel", "bottom", shown=True)
+        self._title_reveal = _Reveal(self, self.title_strip, "title", "top", shown=False)
+
         # T15: ▶ as wide as Trim → equal gaps ▶→timeline and Trim→In/Out.
         self.play_button.setFixedWidth(self.trim_button.sizeHint().width())
 
@@ -459,12 +594,16 @@ class MainWindow(QMainWindow):
             "export_to": lambda: self.export(ask=True),     # T42: like Save As
             "copy_frame": self.copy_frame,
             "fit": self.zoom_fit,
+            "minimize_ui": self.toggle_minimize_ui,
+            "hide_ui": self.toggle_hide_ui,
             "actual_size": self.zoom_actual,
             "quit": self.close,
         }
         for key, (_title, shortcut) in MENU_SHORTCUTS.items():
             action = QAction(self)
-            action.setShortcut(QKeySequence(shortcut))
+            # Shift+\\ arrives as | on some layouts — accept both spellings
+            keys = [QKeySequence(shortcut)] + [QKeySequence(k) for k in MENU_ALIASES.get(key, ())]
+            action.setShortcuts(keys)
             action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             action.triggered.connect(handlers[key])
             self.addAction(action)
@@ -486,7 +625,8 @@ class MainWindow(QMainWindow):
         if kind == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget) \
                 and obj.window() is self and not self._press_origin:
             on_panels = obj is self.panels or self.panels.isAncestorOf(obj)
-            self._press_origin = "panel" if on_panels else "video"
+            on_title = obj is self.title_strip or self.title_strip.isAncestorOf(obj)
+            self._press_origin = "panel" if on_panels else "title" if on_title else "video"
         elif kind == QEvent.Type.MouseButtonRelease and not event.buttons():
             self._press_origin = ""
         if event.type() == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget):
@@ -587,6 +727,9 @@ class MainWindow(QMainWindow):
         self._menu_choice(menu, "Exit Fullscreen" if self._fullscreen else "Fullscreen", False,
                           self.toggle_fullscreen, hint=display_key(self.config.hotkey("fullscreen")),
                           check_column=False)
+        # T27: names say what a click does
+        row("minimize_ui", title="Restore UI" if self._ui_mode == "minimal" else "Minimize UI")
+        row("hide_ui", title="Show UI" if self._ui_mode == "hidden" else "Hide UI")
         if self.info is not None:
             idle = self.worker is None
             menu.addSeparator()
@@ -1472,108 +1615,121 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if not getattr(self, "_ui_ready", False):
             return
+        if event.type() == QEvent.Type.WindowStateChange:
+            self.title_strip.sync()
         if event.type() == QEvent.Type.WindowStateChange and self._fullscreen \
                 and not self.isFullScreen() and not self.isMinimized():
             self._fullscreen = False            # left by the system (e.g. Win+↓)
             self._apply_layout()
 
-    def _apply_layout(self) -> None:
-        """Window: panels under the video. Fullscreen: video fills the screen, panels
-        float over its bottom (16 px from the sides and the bottom, 22d)."""
-        overlay = self._fullscreen
-        if overlay == self._overlay:
-            self._place_overlay()
+    # ================================================== UI modes (T27)
+    MIN_HEIGHT = {"normal": 420, "minimal": 300, "hidden": 180}
+
+    def toggle_minimize_ui(self) -> None:
+        """Ctrl+Shift+\\: hide the bottom row (title and timeline stay)."""
+        self.set_ui_mode("normal" if self._ui_mode == "minimal" else "minimal")
+
+    def toggle_hide_ui(self) -> None:
+        """Ctrl+\\: only the video; the timeline row and the title show on hover."""
+        self.set_ui_mode("normal" if self._ui_mode == "hidden" else "hidden")
+
+    def set_ui_mode(self, mode: str) -> None:
+        if mode == self._ui_mode:
             return
-        self._overlay = overlay
+        self._ui_mode = mode
+        self.config.set_ui_mode(mode)
+        self._apply_layout()
+
+    def _apply_layout(self) -> None:
+        """Window: panels under the video. Fullscreen and Hide UI: video fills the
+        window, panels float over its bottom (fullscreen 16 px from the edges, 22d;
+        Hide UI in a window 8 px). Minimize UI and Hide UI: timeline row only."""
+        mode = self._ui_mode
+        overlay = self._fullscreen or mode == "hidden"
+        self.bottom_bar.setVisible(mode == "normal")
+        edge = theme.GAP2 if self._fullscreen else theme.GAP
         if overlay:
-            self._root.setContentsMargins(0, 0, 0, 0)
-            self._video_gap.changeSize(0, 0)
-            self._root.removeWidget(self.panels)
-            self._panels_layout.setContentsMargins(theme.GAP2, theme.GAP, theme.GAP2, theme.GAP2)
-            theme.set_flag(self.panels, "overlay", True)
-            self._overlay_shown = True
-            self._set_overlay_shown(False, animate=False)
-        else:
-            self._stop_fade()
-            self._root.setContentsMargins(theme.GAP, 0, theme.GAP, theme.GAP2)
-            self._video_gap.changeSize(0, theme.GAP)
-            self._panels_layout.setContentsMargins(0, 0, 0, 0)
-            theme.set_flag(self.panels, "overlay", False)
-            self._root.addWidget(self.panels)
-            self.panels.show()
-            self._overlay_shown = True
-            self._show_cursor()
+            self._panels_layout.setContentsMargins(edge, theme.GAP, edge, edge)
+        if overlay != self._overlay:
+            self._overlay = overlay
+            if overlay:
+                self._root.setContentsMargins(0, 0, 0, 0)
+                self._video_gap.changeSize(0, 0)
+                self._root.removeWidget(self.panels)
+                theme.set_flag(self.panels, "overlay", True)
+                self._panels_reveal.set_shown(False, animate=False)
+            else:
+                self._panels_reveal.set_shown(True, animate=False)
+                self._root.setContentsMargins(theme.GAP, 0, theme.GAP, theme.GAP2)
+                self._video_gap.changeSize(0, theme.GAP)
+                self._panels_layout.setContentsMargins(0, 0, 0, 0)
+                theme.set_flag(self.panels, "overlay", False)
+                self._root.addWidget(self.panels)
+                self._show_cursor()
+        if not self._fullscreen:
+            self.setMinimumHeight(self.MIN_HEIGHT[mode])
+        # the hover title strip: Hide UI in a window only
+        strip = mode == "hidden" and not self._fullscreen
+        if not strip:
+            self._title_reveal.set_shown(False, animate=False)
+        self._title_reveal.active = strip
+        self._panels_reveal.active = overlay
+        frame_hidden = strip
+        if frame_hidden != self._frame_hidden:
+            self._frame_hidden = frame_hidden
+            win_frame.refresh(self, frame_hidden)
         self._root.invalidate()
+        self._central.updateGeometry()
         self._place_overlay()
+        # leaving a compact mode in a narrow window: grow to what fits (nothing is clipped)
+        QTimer.singleShot(0, self._fit_minimum)
+
+    def _fit_minimum(self) -> None:
+        if self._fullscreen or self.isMaximized():
+            return
+        need = self.minimumSizeHint().expandedTo(self.minimumSize())
+        if self.width() < need.width() or self.height() < need.height():
+            self.resize(max(self.width(), need.width()), max(self.height(), need.height()))
 
     def _place_overlay(self) -> None:
-        if not self._overlay:
+        if not getattr(self, "_ui_ready", False):
             return
         central = self._central
-        height = self.panels.sizeHint().height()
-        self.panels.setGeometry(0, central.height() - height, central.width(), height)
-        self.panels.raise_()
+        if self._overlay:
+            height = self.panels.sizeHint().height()
+            self.panels.setGeometry(0, central.height() - height, central.width(), height)
+            self.panels.raise_()
+        self.title_strip.setGeometry(0, 0, central.width(), self.title_strip.HEIGHT)
+        self.title_strip.raise_()
         self.toast.raise_()
 
-    HYSTERESIS = 24          # px the cursor may stray above the shown panels (22a)
     CURSOR_HIDE_S = 1.5      # fullscreen: hide a still cursor
 
     def _update_overlay(self) -> None:
-        """Called from the poll (30 ms): hover → show at once, leave → fade out."""
-        if not self._overlay:
+        """Called from the poll (30 ms): hover → show at once, leave → fade out (22a–c)."""
+        if not (self._panels_reveal.active or self._title_reveal.active):
             return
         global_pos = QCursor.pos()
         pos = self._central.mapFromGlobal(global_pos)
-        zone = self.panels.geometry()
-        if self._overlay_shown:
-            zone = zone.adjusted(0, -self.HYSTERESIS, 0, 0)
         held = bool(QApplication.mouseButtons())
-        if held and self._press_origin == "video":
-            want = False                                   # 22b: crop / pan drag
-        elif held and self._press_origin == "panel":
-            want = True                                    # 22c: playhead, edges, scrub
-        else:
-            focus = QApplication.focusWidget()
-            busy = QApplication.activePopupWidget() is not None and self._overlay_shown
-            editing = focus is not None and self.panels.isAncestorOf(focus) \
-                and isinstance(focus, _FieldEdit)
-            want = zone.contains(pos) or busy or editing
-        if want != self._overlay_shown:
-            self._set_overlay_shown(want, animate=not want)
+        focus = QApplication.focusWidget()
+        popup = QApplication.activePopupWidget() is not None
+        for reveal in (self._panels_reveal, self._title_reveal):
+            if not reveal.active:
+                continue
+            if held and self._press_origin == "video":
+                want = False                                   # 22b: crop / pan drag
+            elif held and self._press_origin == reveal.name:
+                want = True                                    # 22c: playhead, edges, scrub
+            else:
+                editing = focus is not None and isinstance(focus, _FieldEdit) \
+                    and reveal.widget.isAncestorOf(focus)
+                want = reveal.zone().contains(pos) or editing or (popup and reveal.shown)
+            if want != reveal.shown:
+                reveal.set_shown(want, animate=not want)
+                if want:
+                    self._place_overlay()
         self._update_cursor(global_pos, held)
-
-    def _set_overlay_shown(self, shown: bool, animate: bool) -> None:
-        self._overlay_shown = shown
-        self._stop_fade()
-        if shown:
-            self.panels.show()                             # appears without animation
-            self._place_overlay()
-            return
-        if not animate:
-            self.panels.hide()
-            return
-        effect = QGraphicsOpacityEffect(self.panels)
-        self.panels.setGraphicsEffect(effect)
-        fade = QPropertyAnimation(effect, b"opacity", self)
-        fade.setDuration(100)
-        fade.setStartValue(1.0)
-        fade.setEndValue(0.0)
-        fade.setEasingCurve(QEasingCurve.Type.OutQuad)
-        fade.finished.connect(self._fade_done)
-        self._fade = fade
-        fade.start()
-
-    def _fade_done(self) -> None:
-        self._fade = None
-        self.panels.setGraphicsEffect(None)
-        if not self._overlay_shown:
-            self.panels.hide()
-
-    def _stop_fade(self) -> None:
-        if self._fade is not None:
-            fade, self._fade = self._fade, None
-            fade.stop()
-            self.panels.setGraphicsEffect(None)
 
     def _update_cursor(self, global_pos: QPoint, held: bool) -> None:
         """Fullscreen: a still cursor over the video hides after 1.5 s; any move shows it."""
@@ -1584,7 +1740,7 @@ class MainWindow(QMainWindow):
             self._show_cursor()
             return
         if (self._fullscreen and not self._cursor_hidden and not held
-                and not self._overlay_shown and QApplication.activePopupWidget() is None
+                and not self._panels_reveal.shown and QApplication.activePopupWidget() is None
                 and self.isActiveWindow()
                 and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
             QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
@@ -1594,6 +1750,37 @@ class MainWindow(QMainWindow):
         if self._cursor_hidden:
             self._cursor_hidden = False
             QApplication.restoreOverrideCursor()
+
+    # ----------------------------------------------- Windows frame (T27 Hide UI)
+    RESIZE_BAND = 6          # px at the edges that resize the frameless window
+
+    def nativeEvent(self, event_type, message):  # noqa: N802
+        if self._frame_hidden and not self._fullscreen:
+            msg = win_frame.message(event_type, message)
+            if msg is not None:
+                kind, hwnd, wparam, lparam = msg
+                if kind == win_frame.WM_NCCALCSIZE and win_frame.calc_size(hwnd, wparam, lparam):
+                    return True, 0
+                if kind == win_frame.WM_NCHITTEST:
+                    hit = self._hit_test()
+                    if hit:
+                        return True, hit
+        return super().nativeEvent(event_type, message)
+
+    def _hit_test(self) -> int:
+        """Edges resize, the shown title strip (outside its buttons) is the caption."""
+        pos = self.mapFromGlobal(QCursor.pos())
+        if not self.isMaximized():
+            hit = win_frame.edge_hit(pos.x(), pos.y(), self.width(), self.height(),
+                                     self.RESIZE_BAND)
+            if hit:
+                return hit
+        strip = self.title_strip
+        if self._title_reveal.shown and strip.isVisible():
+            local = strip.mapFrom(self, pos)
+            if strip.rect().contains(local) and not strip.over_button(local):
+                return win_frame.HTCAPTION
+        return 0
 
     # ========================================================= zoom (T20)
     def zoom_fit(self) -> None:
@@ -1872,6 +2059,7 @@ class MainWindow(QMainWindow):
         for widget in (self.trim_button, self.crop_button, self.format_button, self.scale_button):
             widget.setEnabled(loaded and idle)
         self.play_button.setEnabled(loaded)
+        self.loop_button.setEnabled(loaded)        # like ▶ — inactive until a file is open
         self.export_button.setEnabled(loaded)
 
     def _error(self, title: str, text: str) -> None:
