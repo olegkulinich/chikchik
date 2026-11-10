@@ -122,8 +122,8 @@ class KeyCap(QPushButton):
         self.setText(display_key(portable))
 
     def natural_width(self) -> int:
-        """Text + padding (8 px each side) + 8 px air each side, at least 72 px."""
-        return max(72, self.fontMetrics().horizontalAdvance(self.text()) + 16 + 16)
+        """Text + padding (8 px each side) + 2 px air each side, at least 64 px."""
+        return max(64, self.fontMetrics().horizontalAdvance(self.text()) + 16 + 4)
 
     def start(self) -> None:
         self.capturing = True
@@ -204,9 +204,9 @@ class HotkeysPopover(Popover):
         # Reference only: frames mode is a Ctrl+click, not a reassignable key.
         row = len(HOTKEY_ACTIONS)
         grid.addWidget(QLabel("Frames / Timecode"), row, 0)
-        hint = dim_label("Ctrl+Click ⌛")
-        hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        grid.addWidget(hint, row, 1)
+        self._ref = dim_label("Ctrl+Click ⌛")
+        self._ref.setAlignment(Qt.AlignmentFlag.AlignCenter)    # centered like the key caps
+        grid.addWidget(self._ref, row, 1, Qt.AlignmentFlag.AlignRight)
         self._rows = row + 1
 
         self.scroll = QScrollArea()
@@ -244,8 +244,10 @@ class HotkeysPopover(Popover):
     def _fit(self) -> None:
         """Caps share the widest width; the list shows at most MAX_ROWS rows."""
         widest = max(cap.natural_width() for cap in self.caps.values())
+        widest = max(widest, self._ref.sizeHint().width())
         for cap in self.caps.values():
             cap.setFixedWidth(widest)
+        self._ref.setFixedWidth(widest)
         row_h = max(cap.sizeHint().height() for cap in self.caps.values())
         rows = min(self._rows, self.MAX_ROWS)
         visible = rows * row_h + (rows - 1) * self.ROW_SPACING
