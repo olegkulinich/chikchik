@@ -152,6 +152,11 @@ QPushButton[seg="true"]:disabled {{ color: {DIM}; background: {BUTTON}; }}
 QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: {ACTIVE}; }}   /* T25: the pick stays visible */
 
 QPushButton[keycap="true"] {{ color: {DIM}; padding: 0 8px; }}
+QScrollArea#HotkeysScroll, QScrollArea#HotkeysScroll > QWidget > QWidget {{ background: transparent; border: none; }}
+QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {BUTTON_HOVER}; border-radius: 3px; min-height: 24px; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QPushButton[keycap="true"]:hover {{ color: {TEXT}; }}
 QPushButton[keycap="true"][capturing="true"] {{ background: {ACTIVE}; color: {TEXT}; }}
 QPushButton[keycap="true"][error="true"] {{ background: {ERROR_BG}; color: {ERROR_FG}; }}

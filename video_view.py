@@ -1,6 +1,7 @@
 """mpv rendered into a QOpenGLWidget, so the crop frame and clicks live in Qt."""
 from __future__ import annotations
 
+import math
 import os
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ class VideoView(QOpenGLWidget):
     menu_requested = Signal(QPoint)    # global position
     _frame_ready = Signal()
     _seek_done = Signal()              # from mpv's event thread → GUI thread
+    _display_changed = Signal()        # dwidth/dheight arrived → re-apply zoom
 
     # Read from a cache filled by mpv's event thread: a synchronous property read
     # waits for the mpv core, which is busy for the whole seek (~200 ms on long
@@ -52,6 +54,7 @@ class VideoView(QOpenGLWidget):
         self._render = None
         self._get_proc = None
         self._frame_ready.connect(self.update, Qt.ConnectionType.QueuedConnection)
+        self._display_changed.connect(self._apply_zoom, Qt.ConnectionType.QueuedConnection)
         self._seek_done.connect(self._dispatch_seek, Qt.ConnectionType.QueuedConnection)
         self._state: dict = {"time-pos": None, "pause": True, "eof-reached": False,
                              "dwidth": 0, "dheight": 0, "hwdec-current": "no"}
@@ -75,8 +78,21 @@ class VideoView(QOpenGLWidget):
         self._scrub_mode = False
         self._light = False
         self._stepping_until = 0.0
+        # T20 canvas zoom: None = fit; otherwise device pixels per display pixel
+        # (1.0 = 100%, 1:1 with the screen) and the display point at the view center.
+        self._scale: float | None = None
+        self._center = QPointF()
+        self._actual = False             # set by Ctrl+1: window resizes keep 100%
+        self._pan: QPointF | None = None
+        self._sent_zoom: tuple | None = None
+        try:
+            self._upscale = str(self.player["scale"])   # restored at ≤ 100%
+        except Exception:
+            self._upscale = "bilinear"
 
     DRAG_THRESHOLD = 5      # px before a press becomes a crop drag
+    ZOOM_STEP = 1.25        # per wheel notch, as on the timeline
+    MAX_SCALE = 32.0        # device px per video px
     # ------------------------------------------------------------ GL
     def initializeGL(self) -> None:
         def get_proc_address(_ctx, name):
@@ -139,16 +155,150 @@ class VideoView(QOpenGLWidget):
     def display_size(self) -> tuple[int, int]:
         return self._state.get("dwidth") or 0, self._state.get("dheight") or 0
 
-    def video_rect(self) -> QRectF:
-        """Where mpv draws the picture (keep-aspect, centered)."""
+    def _display_dims(self) -> tuple[float, float]:
         dw, dh = self.display_size()
         if not dw or not dh:
             dw, dh = self.frame_size
+        return float(dw or 0), float(dh or 0)
+
+    def fit_scale(self) -> float:
+        """Device px per display px at fit."""
+        dw, dh = self._display_dims()
+        if not dw or not dh:
+            return 1.0
+        return min(self.width() / dw, self.height() / dh) * self.devicePixelRatioF()
+
+    def zoom_scale(self) -> float:
+        return self.fit_scale() if self._scale is None else self._scale
+
+    def is_fit(self) -> bool:
+        return self._scale is None
+
+    def video_rect(self) -> QRectF:
+        """Where mpv draws the picture: fit (keep-aspect, centered) or T20 zoom/pan."""
+        dw, dh = self._display_dims()
         if not dw or not dh:
             return QRectF(self.rect())
-        scale = min(self.width() / dw, self.height() / dh)
-        w, h = dw * scale, dh * scale
-        return QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h)
+        if self._scale is None:
+            scale = min(self.width() / dw, self.height() / dh)
+            w, h = dw * scale, dh * scale
+            return QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h)
+        k = self._scale / self.devicePixelRatioF()            # logical px per display px
+        w, h = dw * k, dh * k
+        x = self.width() / 2 - self._center.x() * k
+        y = self.height() / 2 - self._center.y() * k
+        return QRectF(x, y, w, h)
+
+    def _clamp_center(self) -> None:
+        """20b: pan stops at the picture's edges; an axis smaller than the view is centered."""
+        if self._scale is None:
+            return
+        dw, dh = self._display_dims()
+        k = self._scale / self.devicePixelRatioF()
+        half_w, half_h = self.width() / 2 / k, self.height() / 2 / k
+        cx, cy = self._center.x(), self._center.y()
+        cx = dw / 2 if dw * k <= self.width() else min(max(cx, half_w), dw - half_w)
+        cy = dh / 2 if dh * k <= self.height() else min(max(cy, half_h), dh - half_h)
+        self._center = QPointF(cx, cy)
+
+    def _apply_zoom(self) -> None:
+        """Mirror the zoom state into mpv (video-zoom is log2 of the scale over fit,
+        video-pan is in fractions of the scaled picture)."""
+        if self._scale is not None:
+            self._clamp_center()
+        dw, dh = self._display_dims()
+        if self._scale is None or not dw or not dh:
+            values = (0.0, 0.0, 0.0, self._upscale)
+        else:
+            rect = self.video_rect()
+            zoom = math.log2(self._scale / self.fit_scale())
+            pan_x = (rect.center().x() - self.width() / 2) / rect.width()
+            pan_y = (rect.center().y() - self.height() / 2) / rect.height()
+            # above 100% show pixels as pixels
+            values = (zoom, pan_x, pan_y, "nearest" if self._scale > 1.0001 else self._upscale)
+        if values != self._sent_zoom:
+            self._sent_zoom = values
+            zoom, pan_x, pan_y, scaler = values
+            self._command("set", "video-zoom", f"{zoom:.6f}")
+            self._command("set", "video-pan-x", f"{pan_x:.6f}")
+            self._command("set", "video-pan-y", f"{pan_y:.6f}")
+            self._command("set", "scale", scaler)
+        self.update()
+
+    def _set_zoom(self, scale: float | None, anchor: QPointF | None = None) -> None:
+        """New scale keeping the display point under `anchor` (view px) in place."""
+        if not self.has_video:
+            return
+        dw, dh = self._display_dims()
+        if scale is None or not dw or not dh:
+            self._scale = None
+            self._actual = False
+            self._apply_zoom()
+            return
+        anchor = QPointF(self.width() / 2, self.height() / 2) if anchor is None else anchor
+        rect = self.video_rect()
+        old_k = rect.width() / dw
+        point = QPointF((anchor.x() - rect.x()) / old_k, (anchor.y() - rect.y()) / old_k)
+        new_k = scale / self.devicePixelRatioF()
+        self._scale = scale
+        self._center = QPointF(point.x() - (anchor.x() - self.width() / 2) / new_k,
+                               point.y() - (anchor.y() - self.height() / 2) / new_k)
+        self._apply_zoom()
+
+    def zoom_fit(self) -> None:
+        """Ctrl+0."""
+        self._set_zoom(None)
+
+    def zoom_actual(self) -> None:
+        """Ctrl+1: 100% — may be below fit for a small video (20c)."""
+        self._set_zoom(1.0)
+        self._actual = self.has_video
+
+    def zoom_by(self, steps: float, anchor: QPointF) -> None:
+        """Wheel: 20a — zooming out stops at fit; below fit (after Ctrl+1) it jumps to fit."""
+        fit = self.fit_scale()
+        current = self.zoom_scale()
+        if steps < 0 and current <= fit * 1.0001:
+            self._set_zoom(None)
+            return
+        target = min(self.MAX_SCALE, current * self.ZOOM_STEP ** steps)
+        self._actual = False
+        if steps < 0 and target <= fit * 1.0001:
+            self._set_zoom(None)
+        else:
+            self._set_zoom(target, anchor)
+
+    def visible_frame_rect(self) -> QRect | None:
+        """20d/T31: the visible part of the frame in source pixels (no evenness)."""
+        if not self.has_video or self._scale is None:
+            return None
+        fw, fh = self.frame_size
+        if not fw or not fh:
+            return None
+        rect = self.video_rect()
+        shown = rect.intersected(QRectF(self.rect()))
+        if shown.isEmpty():
+            return None
+        sx, sy = fw / rect.width(), fh / rect.height()
+        left = max(0, math.floor((shown.left() - rect.left()) * sx + 1e-6))
+        top = max(0, math.floor((shown.top() - rect.top()) * sy + 1e-6))
+        right = min(fw, math.ceil((shown.right() - rect.left()) * sx - 1e-6))
+        bottom = min(fh, math.ceil((shown.bottom() - rect.top()) * sy - 1e-6))
+        return QRect(left, top, max(1, right - left), max(1, bottom - top))
+
+    def reset_zoom(self) -> None:
+        self._scale = None
+        self._actual = False
+        self._pan = None
+        self._apply_zoom()
+
+    def resizeEvent(self, event) -> None:
+        """Keep the real scale (100% stays 100%); a wheel zoom that ends up below fit → fit."""
+        super().resizeEvent(event)
+        if self._scale is not None and not self._actual \
+                and self._scale <= self.fit_scale() * 1.0001:
+            self._scale = None
+        self._apply_zoom()
 
     def view_to_frame(self, point: QPointF) -> QPointF:
         vr = self.video_rect()
@@ -171,6 +321,7 @@ class VideoView(QOpenGLWidget):
             self._stepping_until = 0.0                     # the step is over
         if name in ("dwidth", "dheight"):
             self._frame_ready.emit()
+            self._display_changed.emit()
 
     def _on_event(self, event) -> None:                    # mpv event thread
         try:
@@ -193,6 +344,7 @@ class VideoView(QOpenGLWidget):
         self.frame_size = frame_size
         self.frame_duration_s = frame_duration
         self.has_video = True
+        self.reset_zoom()                # T20: each file opens at fit
         self._in_flight = self._pending = None
         paused = not autoplay        # T35: off → the first frame, paused
         self._state.update({"time-pos": None, "eof-reached": False, "pause": paused})
@@ -388,13 +540,41 @@ class VideoView(QOpenGLWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.press_at(event.position())
+        elif event.button() == Qt.MouseButton.MiddleButton and self.has_video:
+            self._pan = event.position()                 # T20: pan as on the timeline
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event) -> None:
+        if self._pan is not None:
+            if self._scale is not None:
+                delta = event.position() - self._pan
+                k = self._scale / self.devicePixelRatioF()
+                self._center -= QPointF(delta.x() / k, delta.y() / k)
+                self._apply_zoom()
+            self._pan = event.position()
+            return
         self.move_to(event.position())
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.release_at(event.position())
+        elif event.button() == Qt.MouseButton.MiddleButton and self._pan is not None:
+            self._pan = None
+            self.set_crop_enabled(self.crop_enabled)     # restores the cursor
+
+    def wheelEvent(self, event) -> None:
+        """T20: wheel = zoom around the cursor; horizontal wheel = pan."""
+        if not self.has_video:
+            return
+        delta = event.angleDelta()
+        if abs(delta.x()) > abs(delta.y()):
+            if self._scale is not None:
+                k = self._scale / self.devicePixelRatioF()
+                self._center -= QPointF(delta.x() / 120 * 40 / k, 0)
+                self._apply_zoom()
+        elif delta.y():
+            self.zoom_by(delta.y() / 120, event.position())
+        event.accept()
 
     def contextMenuEvent(self, event) -> None:
         self.menu_requested.emit(event.globalPos())
