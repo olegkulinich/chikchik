@@ -616,6 +616,18 @@ class MainWindow(QMainWindow):
         if kind == QEvent.Type.Resize and obj is getattr(self, "_central", None):
             self._place_overlay()
         in_window = isinstance(obj, QWidget) and obj.window() is self
+        if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier \
+                and win_frame.is_backslash_key(event):
+            # T27: by the physical key; ShortcutOverride is accepted so no other
+            # shortcut (e.g. Ctrl+Shift+/ on a Russian layout) sees it
+            if kind == QEvent.Type.KeyPress and not event.isAutoRepeat():
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    self.toggle_minimize_ui()
+                else:
+                    self.toggle_hide_ui()
+            event.accept()
+            return True
         if in_window and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
                                   QEvent.Type.MouseButtonRelease) and self._rmb_event(obj, event):
             return True

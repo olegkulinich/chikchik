@@ -36,6 +36,16 @@ if ENABLED:
                     ("top", ctypes.c_int), ("bottom", ctypes.c_int)]
 
 
+VK_OEM_5 = 0xDC          # the physical \\ | key on Windows, whatever the layout
+
+
+def is_backslash_key(event) -> bool:
+    """T27: Ctrl+\\ / Ctrl+Shift+\\ by the physical key — with Shift the same key types
+    | (EN) or / (RU), and Qt matches shortcuts by the character, so Ctrl+Shift+\\
+    never fired. Figma works by the key, so do we."""
+    return ENABLED and event.nativeVirtualKey() == VK_OEM_5
+
+
 def message(event_type, message_ptr):
     """(msg id, hwnd, wParam, lParam) of a native Windows message, or None."""
     if not ENABLED or bytes(event_type) != b"windows_generic_MSG":
