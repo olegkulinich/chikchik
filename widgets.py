@@ -134,7 +134,7 @@ class Field(QFrame):
         self.setFixedSize(width, theme.H)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(6)     # T34c: + QLineEdit's own ~2 px → reads as 8
         self.prefix = icon if icon is not None else dim_label(prefix)
         self.prefix.setCursor(Qt.CursorShape.SizeHorCursor)
         self.edit = _FieldEdit()

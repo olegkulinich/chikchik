@@ -264,7 +264,7 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = _Central()
         root = QVBoxLayout(central)
-        root.setContentsMargins(theme.GAP, theme.GAP, theme.GAP, theme.GAP2)
+        root.setContentsMargins(theme.GAP, 0, theme.GAP, theme.GAP2)   # T24: no gap above the video
         root.setSpacing(0)
 
         self.video = VideoView()
@@ -283,7 +283,7 @@ class MainWindow(QMainWindow):
         self.timeline.edge_preview.connect(self._edge_preview)
         self.timeline.in_dragged.connect(lambda t: self.set_in(t))
         self.timeline.out_dragged.connect(lambda t: self.set_out(t))
-        self.time_field = Field("⌛", 112)   # emoji, like the app icon
+        self.time_field = Field("⌛", 110)   # emoji, like the app icon
         self.time_field.setToolTip("Current time")
         self.time_field.setText("00:00.000")
         self.time_field.committed.connect(self._time_field_committed)
@@ -301,8 +301,8 @@ class MainWindow(QMainWindow):
                                   tooltip="Export only the In–Out range (off: the whole file)")
         self.trim_button.toggled.connect(self._trim_toggled)
         bottom.addWidget(self.trim_button)
-        self.in_field = Field("In", 116)
-        self.out_field = Field("Out", 116)
+        self.in_field = Field("In", 114)
+        self.out_field = Field("Out", 114)
         self.in_field.committed.connect(lambda text: self._time_committed(self.in_field, text, True))
         self.out_field.committed.connect(lambda text: self._time_committed(self.out_field, text, False))
         self.in_field.nudged.connect(lambda n, c: self._nudge_trim(True, n, c))
@@ -311,7 +311,7 @@ class MainWindow(QMainWindow):
             field.scrub_started.connect(self._begin_edge_preview)
             field.scrub_finished.connect(self._end_edge_preview)
         bottom.addWidget(FieldGroup([self.in_field, self.out_field]))
-        bottom.addStretch(1)
+        bottom.addSpacing(theme.GAP2 - theme.HGAP)   # T34b: 16 px between Trim and Crop
 
         self.crop_button = button("Crop", checkable=True,
                                   tooltip="Drag on the video to draw a frame")
@@ -319,7 +319,7 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.crop_button)
         self.crop_fields = {}
         for key in ("X", "Y", "W", "H"):
-            field = Field(key, 68)
+            field = Field(key, 66)
             field.committed.connect(lambda text, k=key: self._crop_field_committed(k, text))
             field.nudged.connect(lambda n, c, k=key: self._nudge_crop(k, n, c))
             self.crop_fields[key] = field
@@ -327,11 +327,10 @@ class MainWindow(QMainWindow):
         bottom.addStretch(1)
 
         self.format_button = button(".mp4", tooltip="Output format")
-        self.format_button.setMinimumWidth(56)
         self.format_button.clicked.connect(self._format_clicked)
         bottom.addWidget(self.format_button)
 
-        self.fps_field = Field("fps", 88)
+        self.fps_field = Field("fps", 86)
         self.fps_field.setToolTip("Output frame rate (can't exceed the source)")
         self.fps_field.committed.connect(self._fps_committed)
         self.fps_field.nudged.connect(self._nudge_fps)
@@ -339,7 +338,6 @@ class MainWindow(QMainWindow):
 
         self.scale_button = button(format_scale(self.scale),
                                    tooltip="Output scale (applied after crop)")
-        self.scale_button.setFixedWidth(56)
         self.scale_button.clicked.connect(self._scale_clicked)
         bottom.addWidget(self.scale_button)
 
@@ -520,11 +518,7 @@ class MainWindow(QMainWindow):
         self.timeline.set_duration(info.duration, info.frame_duration)   # also resets zoom
         self._last_dims = None
 
-        fps = format_fps(info.fps) if info.fps else "?"
-        hdr = " · HDR" if info.hdr else ""
-        self.setWindowTitle(
-            f"{APP_NAME} — {path.name} · {info.width}×{info.height} · {fps} fps · {info.codec}{hdr}"
-        )
+        self.setWindowTitle(f"{APP_NAME} — {path.name}")   # T23: name only
         self._show_times()
         self._show_crop()
         self._show_fps()

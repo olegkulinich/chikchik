@@ -10,21 +10,21 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 # Colors
 WINDOW = "#1E1E1E"
-PANEL = "#232323"
-BUTTON = "#282828"
+PANEL = "#222222"        # menus/popovers: a touch lighter than the window
+BUTTON = "#2C2C2C"
 BUTTON_HOVER = "#3B3B3B"
 ACTIVE = "#1B3032"
 ACTIVE_HOVER = "#23403F"
 ERROR_BG = "#3A1C1D"
-ERROR_FG = "#C44040"
+ERROR_FG = "#E05555"
 FIELD = "#151515"
 STROKE = "#333333"
-TEXT = "#FFFFFF"
-DIM = "#535353"
-HOTKEY_DIM = "#4A4A4A"
-MINIMAP_TRACK = "#262626"   # timeline minimap: whole file
-MINIMAP_VIEW = "#5A5A5A"    # timeline minimap: visible window
-RULER = "#3A3A3A"           # timeline ruler ticks   # hotkey column next to a dim column — a tone darker
+TEXT = "#E6E6E6"         # T28: values ~11–14:1 — quieter, focus on the video
+DIM = "#757575"          # T28: labels, hints, disabled ~3–4:1
+HOTKEY_DIM = DIM
+MINIMAP_TRACK = "#383838"   # timeline minimap: whole file
+MINIMAP_VIEW = DIM    # timeline minimap: visible window
+RULER = DIM               # timeline ruler ticks
 VIDEO_BG = "#000000"
 CROP = "#00F0FF"      # bright cyan — inverse of the red playhead
 PLAYHEAD = "#FF2A2A"
@@ -104,6 +104,23 @@ def dark_title_bar(widget: QWidget) -> None:
         pass
 
 
+def cloak(widget: QWidget, on: bool) -> None:
+    """T38, Windows: keep the window invisible to DWM until Qt has drawn it.
+
+    The whole window is drawn through OpenGL (QOpenGLWidget), so without this
+    Windows shows an uncleared light-gray surface for a split second on start."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        value = ctypes.c_int(1 if on else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            int(widget.winId()), 13, ctypes.byref(value), ctypes.sizeof(value))  # DWMWA_CLOAK
+    except Exception:
+        pass
+
+
 def stylesheet() -> str:
     return f"""
 * {{
@@ -129,10 +146,9 @@ QPushButton:checked {{ background: {ACTIVE}; }}
 QPushButton:checked:hover {{ background: {ACTIVE_HOVER}; }}
 QPushButton[error="true"] {{ background: {ERROR_BG}; color: {ERROR_FG}; }}
 
-QPushButton[seg="true"] {{ color: {DIM}; }}
-QPushButton[seg="true"]:hover {{ color: {TEXT}; background: {BUTTON_HOVER}; }}
-QPushButton[seg="true"]:checked {{ color: {TEXT}; background: {ACTIVE}; }}
-QPushButton[seg="true"]:disabled {{ color: #3A3A3A; background: {BUTTON}; }}
+QPushButton[seg="true"]:hover {{ background: {BUTTON_HOVER}; }}
+QPushButton[seg="true"]:checked {{ background: {ACTIVE}; }}
+QPushButton[seg="true"]:disabled {{ color: {DIM}; background: {BUTTON}; }}
 QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: #1D2526; }}
 
 QPushButton[keycap="true"] {{ color: {DIM}; padding: 0 8px; }}

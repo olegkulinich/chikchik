@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -90,6 +90,18 @@ def main() -> int:
     args = [a for a in sys.argv[1:] if a.strip()]
     gif = "--gif" in args
     paths = [a for a in args if a != "--gif"]
+    # T38: show the window only after its first frame is drawn (no light flash).
+    theme.cloak(window, True)
+    uncloaked = False
+
+    def uncloak() -> None:
+        nonlocal uncloaked
+        if not uncloaked:
+            uncloaked = True
+            theme.cloak(window, False)
+
+    window.video.frameSwapped.connect(uncloak)
+    QTimer.singleShot(1000, uncloak)          # safety net if no frame arrives
     window.show()
     if gif:
         window.set_format("gif")

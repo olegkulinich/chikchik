@@ -6,12 +6,13 @@ from dataclasses import dataclass
 from PySide6.QtCore import QObject, QSettings, Signal
 from PySide6.QtGui import QKeySequence
 
-QUALITY = {"high": 18, "normal": 20, "small": 23}
-SPEEDS = ("veryfast", "fast", "medium", "slow")
+# Stored ids stay "normal"/"small" (shown as Medium/Low) so saved choices survive updates.
+QUALITY = {"high": 18, "normal": 20, "small": 25}
+SPEEDS = ("fast", "medium", "slow")
 
 DEFAULTS = {
-    "quality": "normal",     # high | normal | small
-    "speed": "veryfast",
+    "quality": "normal",     # high | normal | small  (High / Medium / Low)
+    "speed": "medium",       # fast | medium | slow
     "save_to": "same",       # same | ask
 }
 
@@ -78,7 +79,10 @@ class Config(QObject):
 
     # --- export settings
     def get(self, key: str) -> str:
-        return str(self._store.value(f"export/{key}", DEFAULTS[key]))
+        value = str(self._store.value(f"export/{key}", DEFAULTS[key]))
+        if key == "speed" and value not in SPEEDS:   # e.g. "veryfast" from 4.x
+            return DEFAULTS["speed"]
+        return value
 
     def set(self, key: str, value: str) -> None:
         if self.get(key) != value:
@@ -91,8 +95,7 @@ class Config(QObject):
 
     @property
     def preset(self) -> str:
-        speed = self.get("speed")
-        return speed if speed in SPEEDS else "veryfast"
+        return self.get("speed")
 
     # --- hotkeys
     def hotkey(self, action_id: str) -> str:
