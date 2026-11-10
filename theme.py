@@ -104,6 +104,27 @@ def dark_title_bar(widget: QWidget) -> None:
         pass
 
 
+def border_in_fullscreen(widget: QWidget, on: bool) -> None:
+    """Windows: an OpenGL window covering the whole monitor gets a special DWM mode
+    where menus and other popups open *behind* it (the right-click menu was invisible
+    but grabbed the input). WS_BORDER opts out — what Qt's setHasBorderInFullScreen does."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        hwnd = int(widget.winId())
+        gwl_style, ws_border = -16, 0x00800000
+        style = user32.GetWindowLongW(hwnd, gwl_style)
+        style = style | ws_border if on else style & ~ws_border
+        user32.SetWindowLongW(hwnd, gwl_style, style)
+        # SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020)
+    except Exception:
+        pass
+
+
 def cloak(widget: QWidget, on: bool) -> None:
     """T38, Windows: keep the window invisible to DWM until Qt has drawn it.
 

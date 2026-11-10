@@ -264,6 +264,9 @@ class MainWindow(QMainWindow):
         self._cursor_hidden = False
         self._cursor_pos = QPoint()
         self._cursor_still_since = time.monotonic()
+        self._rmb_press: QPoint | None = None
+        self._rmb_dragging = False
+        self._drag_offset = QPoint()
 
         self._build_ui()
         self.settings_popover = SettingsPopover(self.config, self)
@@ -461,6 +464,13 @@ class MainWindow(QMainWindow):
         kind = event.type()
         if kind == QEvent.Type.Resize and obj is getattr(self, "_central", None):
             self._place_overlay()
+        in_window = isinstance(obj, QWidget) and obj.window() is self
+        if in_window and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
+                                  QEvent.Type.MouseButtonRelease) and self._rmb_event(obj, event):
+            return True
+        if in_window and kind == QEvent.Type.ContextMenu \
+                and event.reason() == event.Reason.Mouse:
+            return True                    # the menu opens on release, in _rmb_event
         if kind == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget) \
                 and obj.window() is self and not self._press_origin:
             on_panels = obj is self.panels or self.panels.isAncestorOf(obj)
@@ -1382,16 +1392,71 @@ class MainWindow(QMainWindow):
         """F only. Fullscreen opens on the window's monitor; leaving restores
         maximized or normal, as it was."""
         if self._fullscreen:
-            self._fullscreen = False
-            if self._was_maximized:
-                self.showMaximized()
-            else:
-                self.showNormal()
+            self._leave_fullscreen(restore_maximized=True)
         else:
             self._was_maximized = self.isMaximized()
             self._fullscreen = True
             self.showFullScreen()
+            theme.border_in_fullscreen(self, True)
+            QTimer.singleShot(0, lambda: theme.border_in_fullscreen(self, self._fullscreen))
         self._apply_layout()
+
+    def _leave_fullscreen(self, restore_maximized: bool) -> None:
+        self._fullscreen = False
+        theme.border_in_fullscreen(self, False)
+        if restore_maximized and self._was_maximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self._apply_layout()
+
+    # ------------------------------------------------ right-button drag (PureRef)
+    RMB_DRAG = 5             # px before a right press moves the window instead of the menu
+
+    def _rmb_event(self, obj, event) -> bool:
+        """Right button anywhere in the window: click → menu, drag → move the window.
+        Dragging out of fullscreen (or a maximized window) restores it under the cursor."""
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
+            self._rmb_press = event.globalPosition().toPoint()
+            self._rmb_dragging = False
+            return True
+        if self._rmb_press is None:
+            return False
+        if kind == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.RightButton:
+            pos = event.globalPosition().toPoint()
+            if not self._rmb_dragging:
+                if (pos - self._rmb_press).manhattanLength() < self.RMB_DRAG:
+                    return True
+                self._start_window_drag(self._rmb_press)
+            self.move(pos - self._drag_offset)
+            return True
+        if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
+            press, dragging = self._rmb_press, self._rmb_dragging
+            self._rmb_press, self._rmb_dragging = None, False
+            if not dragging:
+                self.show_menu(press)
+            return True
+        return False
+
+    def _start_window_drag(self, press: QPoint) -> None:
+        self._rmb_dragging = True
+        frame = self.frameGeometry()
+        rel_x = (press.x() - frame.x()) / max(1, frame.width())
+        offset_y = press.y() - frame.y()
+        if self._fullscreen or self.isMaximized():
+            # like dragging a maximized window's title bar: keep the cursor at the same
+            # relative spot of the restored window
+            if self._fullscreen:
+                self._leave_fullscreen(restore_maximized=False)
+            else:
+                self.showNormal()
+            normal = self.normalGeometry()
+            offset_y = min(offset_y, max(0, normal.height() - 40))
+            self._drag_offset = QPoint(round(rel_x * normal.width()), offset_y)
+            self.move(press - self._drag_offset)
+        else:
+            self._drag_offset = press - frame.topLeft()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
@@ -1828,11 +1893,7 @@ class MainWindow(QMainWindow):
                 if self.job.palette is not None:
                     self._remove(self.job.palette)
         if self._fullscreen:                 # T22: fullscreen isn't remembered
-            self._fullscreen = False
-            if self._was_maximized:
-                self.showMaximized()
-            else:
-                self.showNormal()
+            self._leave_fullscreen(restore_maximized=True)
         self.config.set_geometry(self.saveGeometry())
         self.poll.stop()
         self.video.shutdown()
