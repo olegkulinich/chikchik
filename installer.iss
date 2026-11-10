@@ -57,82 +57,12 @@ Source: "THIRD-PARTY.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "LICENSE.LGPL"; DestDir: "{app}\licenses"; DestName: "mpv-LICENSE.LGPL"; Flags: ignoreversion
 Source: "ffmpeg\LICENSE"; DestDir: "{app}\licenses"; DestName: "FFmpeg-LICENSE.txt"; Flags: ignoreversion
 Source: "fonts\LICENSE-Inter.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
-
-[Tasks]
-Name: "contextmenu"; Description: "Add ""Trim / Crop"" and ""Trim / Crop → GIF"" to the context menu"
+Source: "icons\LICENSE-FluentEmoji.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 
 [Registry]
-; Explorer right-click items (classic menu; on Windows 11 under "Show more options").
-; One task for both items (task contextmenu): either both or none; unchecked on update →
-; the keys are removed again. Key names QuickTrimCrop / QuickTrimCropGIF keep them adjacent.
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mp4\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mkv\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mov\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.m4v\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.avi\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.webm\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.mts\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCrop"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCrop"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCrop\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCrop"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCropGIF"; ValueType: string; ValueName: ""; ValueData: "Trim / Crop → GIF"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCropGIF"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCropGIF\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --gif ""%1"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\.ts\shell\QuickTrimCropGIF"; ValueType: none; Flags: deletekey; Tasks: not contextmenu
-
 ; Rename: remove the old "Open with" entry (QuickTrimCrop.exe).
 Root: HKCU; Subkey: "Software\Classes\Applications\{#OldName}.exe"; ValueType: none; Flags: deletekey
 Root: HKCU; Subkey: "Software\Classes\.mp4\OpenWithList\{#OldName}.exe"; ValueType: none; Flags: deletekey
@@ -166,3 +96,76 @@ Root: HKCU; Subkey: "Software\Classes\.ts\OpenWithList\{#AppExe}"; Flags: uninsd
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+{ T30: Explorer right-click items "ChikChik!" / "ChikChik! → GIF" (HKCU).
+  First install: both are added. Update: the user's choice (Settings → Explorer Menu)
+  stays — items that exist only get the new title, icon and command. Uninstall: removed.
+  Key names QuickTrimCrop / QuickTrimCropGIF stay (Explorer sorts verbs by key name). }
+
+const
+  ShellRoot = 'Software\Classes\SystemFileAssociations\';
+
+var
+  FirstInstall: Boolean;
+
+function Extensions(I: Integer): String;
+begin
+  case I of
+    0: Result := '.mp4';  1: Result := '.mkv';  2: Result := '.mov';  3: Result := '.m4v';
+    4: Result := '.avi';  5: Result := '.webm'; 6: Result := '.mts';  7: Result := '.ts';
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  // No uninstall entry for our AppId yet → a fresh install (not an update).
+  FirstInstall := not RegKeyExists(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{04204E1A-5B89-4671-B709-80414D770E97}_is1');
+  Result := True;
+end;
+
+procedure WriteItem(Ext, KeyName, Title, Icon, Command: String);
+var
+  Key: String;
+begin
+  Key := ShellRoot + Ext + '\shell\' + KeyName;
+  RegWriteStringValue(HKCU, Key, '', Title);
+  RegWriteStringValue(HKCU, Key, 'Icon', Icon);
+  RegWriteStringValue(HKCU, Key + '\command', '', Command);
+end;
+
+procedure UpdateItem(KeyName, Title, Icon, Args: String);
+var
+  I: Integer;
+  Ext, Exe: String;
+begin
+  Exe := ExpandConstant('{app}\{#AppExe}');
+  for I := 0 to 7 do
+  begin
+    Ext := Extensions(I);
+    if FirstInstall or RegKeyExists(HKCU, ShellRoot + Ext + '\shell\' + KeyName) then
+      WriteItem(Ext, KeyName, Title, Icon, '"' + Exe + '"' + Args + ' "%1"');
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    UpdateItem('QuickTrimCrop', '{#AppName}', ExpandConstant('{app}\{#AppExe},0'), '');
+    UpdateItem('QuickTrimCropGIF', '{#AppName} → GIF', ExpandConstant('{app}\gif.ico'), ' --gif');
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  I: Integer;
+begin
+  if CurUninstallStep = usPostUninstall then
+    for I := 0 to 7 do
+    begin
+      RegDeleteKeyIncludingSubkeys(HKCU, ShellRoot + Extensions(I) + '\shell\QuickTrimCrop');
+      RegDeleteKeyIncludingSubkeys(HKCU, ShellRoot + Extensions(I) + '\shell\QuickTrimCropGIF');
+    end;
+end;

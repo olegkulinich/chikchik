@@ -56,7 +56,7 @@ def main() -> int:
 
     theme.load_fonts(app)
     app.setStyleSheet(theme.stylesheet())
-    app.setWindowIcon(theme.emoji_icon())
+    app.setWindowIcon(theme.app_icon())
 
     from backend import executable
 

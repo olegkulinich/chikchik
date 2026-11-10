@@ -59,6 +59,16 @@ def load_fonts(app: QApplication) -> None:
     app.setFont(font)
 
 
+def app_icon() -> QIcon:
+    """T30: Fluent Emoji 3D ✂️ (icon.ico, all sizes); the emoji font as a fallback."""
+    path = base_dir() / "icon.ico"
+    if path.exists():
+        icon = QIcon(str(path))
+        if not icon.isNull():
+            return icon
+    return emoji_icon()
+
+
 def emoji_icon(emoji: str = "✂️", size: int = 256) -> QIcon:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)

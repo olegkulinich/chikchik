@@ -23,3 +23,8 @@ Python - Python Software Foundation License
 
 Inter typeface - SIL Open Font License 1.1
   License: licenses\LICENSE-Inter.txt
+
+Fluent Emoji (3D: scissors, victory hand) - MIT License, (c) Microsoft Corporation
+  Files:   icon.ico, gif.ico (app and Explorer menu icons)
+  License: licenses\LICENSE-FluentEmoji.txt
+  Source:  https://github.com/microsoft/fluentui-emoji
