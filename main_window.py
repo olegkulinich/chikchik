@@ -561,7 +561,8 @@ class MainWindow(QMainWindow):
         self.video.set_crop(self.crop)
         self.video.load(path, (info.width, info.height),
                         self.audio.number if self.audio else None, None,
-                        autoplay=self.config.flag("autoplay"))          # T35
+                        autoplay=self.config.flag("autoplay"),          # T35
+                        frame_duration=info.frame_duration)
         start_format = self.config.start_format()                          # T25
         self.fmt = start_format if start_format in FORMATS else "mp4"
         self.timeline.set_duration(info.duration, info.frame_duration)   # also resets zoom
@@ -636,6 +637,8 @@ class MainWindow(QMainWindow):
     def _timeline_seek(self, t: float, final: bool) -> None:
         """Playhead/time field follow every move; mpv seeks through its queue
         (one in flight, latest wins — never waits in the GUI thread); release → exact."""
+        t = self._snap(t)
+        self.timeline.show_position(t)
         self.time_field.setText(self._fmt(t))
         if final:
             self._exact_timer.stop()
@@ -657,7 +660,7 @@ class MainWindow(QMainWindow):
         # whole drag fits between two keyframes (anime/films: every 2–10 s) and the
         # picture wouldn't change — there, seek exactly (the queue keeps the UI smooth).
         exact = self.timeline.view_end - self.timeline.view_start <= EXACT_SCRUB_SPAN
-        moved = self._scrub_t is None or abs(t - self._scrub_t) >= self._step(False)
+        moved = self._scrub_t is None or abs(t - self._scrub_t) >= self._step(False) / 2
         self._scrub_t = t
         if not moved:          # jitter under a frame: keep the rest timer running
             return
@@ -686,7 +689,7 @@ class MainWindow(QMainWindow):
     def _visible_range(self) -> tuple[float, float]:
         """T31: what the timeline shows (zoomed → the visible window, else the whole file)."""
         tl = self.timeline
-        return max(0.0, tl.view_start), min(self.info.duration, tl.view_end)
+        return self._snap(tl.view_start), self._snap(tl.view_end)
 
     def _trim_toggled(self, checked: bool) -> None:
         if self.info is not None and not self._quiet:
@@ -723,7 +726,7 @@ class MainWindow(QMainWindow):
         if step:
             self._history_flush()
         self._enable_trim()
-        value = max(0.0, min(self.info.duration, value))
+        value = self._snap(value)
         if value >= self.trim_out:
             self.trim_out = self.info.duration
         self.trim_in = value
@@ -737,7 +740,7 @@ class MainWindow(QMainWindow):
         if step:
             self._history_flush()
         self._enable_trim()
-        value = max(0.0, min(self.info.duration, value))
+        value = self._snap(value)
         if value <= self.trim_in:
             self.trim_in = 0.0
         self.trim_out = value
@@ -756,6 +759,7 @@ class MainWindow(QMainWindow):
         if value is None or value > self.info.duration or not other_ok:
             field.set_error(True)
             return
+        value = self._snap(value)
         field.set_error(False)
         if is_in:
             self.trim_in = value
@@ -765,6 +769,14 @@ class MainWindow(QMainWindow):
         self._show_times()
         self._show_at(value)
         self._history_commit()
+
+    def _snap(self, t: float) -> float:
+        """Nearest frame start — the playhead, trim edges and seeks sit on frames, so
+        the picture always matches the playhead (no shift after stopping)."""
+        if self.info is None:
+            return t
+        fd = self._step(False)
+        return max(0.0, min(self.info.duration, round(t / fd) * fd))
 
     def _step(self, coarse: bool) -> float:
         frame = self.info.frame_duration if self.info and self.info.frame_duration else 1 / 30
@@ -790,6 +802,7 @@ class MainWindow(QMainWindow):
 
     def _show_at(self, t: float) -> None:
         """Move the playhead/⌛ to t at once and seek there (mpv catches up)."""
+        t = self._snap(t)
         self.timeline.show_position(t)
         self.time_field.setText(self._fmt(t))
         self.video.seek(t, True)
@@ -826,7 +839,7 @@ class MainWindow(QMainWindow):
         # mpv reports the new position with a delay — chain fast steps from the last target.
         chain = now - self._nudge_stamp < 0.6 or self.video.seek_busy()
         base = self._nudge_target if chain else self._position()
-        position = max(0.0, min(self.info.duration, base + steps * self._step(coarse)))
+        position = self._snap(base + steps * self._step(coarse))
         self._nudge_target, self._nudge_stamp = position, now
         self._hold_target, self._hold_until = position, now + 0.5
         self.timeline.set_position(position)
@@ -841,6 +854,7 @@ class MainWindow(QMainWindow):
             self.time_field.set_error(True)
             return
         self.time_field.set_error(False)
+        value = self._snap(value)
         self.time_field.setText(self._fmt(value))
         self._nudge_target, self._nudge_stamp = value, time.monotonic()
         self.video.seek(value)
@@ -864,10 +878,12 @@ class MainWindow(QMainWindow):
         """D edits move Out; In stays. Length = what's exported (Out frame included)."""
         if not self._editable():
             return
-        self._enable_trim()
+        if not self.trim_button.isChecked():
+            self._enable_trim()
+            self.trim_in = self._snap(self.timeline.position)    # D with Trim off: from the playhead
         frame = self._step(False)
         length = max(frame, length)
-        self.trim_out = max(self.trim_in, min(self.info.duration, self.trim_in + length - frame))
+        self.trim_out = self._snap(max(self.trim_in, min(self.info.duration, self.trim_in + length - frame)))
         self._show_times()
         self._show_at(self.trim_out)
 
@@ -885,7 +901,6 @@ class MainWindow(QMainWindow):
     def _nudge_duration(self, steps: int, coarse: bool) -> None:
         if self.info is None:
             return
-        self._enable_trim()
         self._set_duration(self._trim_range()[1] + steps * self._step(coarse))
 
     # --------------------------------------------- frames mode (T39)
@@ -934,6 +949,7 @@ class MainWindow(QMainWindow):
             t = self.trim_in if start else self.trim_out
         else:
             t = 0.0 if start else max(0.0, self.info.duration - self._step(False))
+        t = self._snap(t)
         self.timeline.show_position(t)
         self.time_field.setText(self._fmt(t))
         self.video.seek(t, True)
@@ -1360,10 +1376,14 @@ class MainWindow(QMainWindow):
         info = self.info
         kind = self._kind()
         start, duration = self._trim_range()
+        if start > 0 and kind != "copy":
+            # FFmpeg starts at the first frame at/after -ss: aim a bit early → the In frame
+            quarter = info.frame_duration / 4
+            start, duration = start - quarter, duration
         start_number = 0
         if kind == "png":      # output = folder; frames are numbered by source frame (T19b)
             fps = info.fps or 0.0
-            start_number = round(start * fps)
+            start_number = round(start * fps)          # rounds back to the In frame
             output.mkdir(parents=True, exist_ok=True)
             output = png_pattern(output, self.source.stem, round(info.duration * fps))
         try:
