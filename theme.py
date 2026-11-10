@@ -149,7 +149,7 @@ QPushButton[error="true"] {{ background: {ERROR_BG}; color: {ERROR_FG}; }}
 QPushButton[seg="true"]:hover {{ background: {BUTTON_HOVER}; }}
 QPushButton[seg="true"]:checked {{ background: {ACTIVE}; }}
 QPushButton[seg="true"]:disabled {{ color: {DIM}; background: {BUTTON}; }}
-QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: #1D2526; }}
+QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: {ACTIVE}; }}   /* T25: the pick stays visible */
 
 QPushButton[keycap="true"] {{ color: {DIM}; padding: 0 8px; }}
 QPushButton[keycap="true"]:hover {{ color: {TEXT}; }}

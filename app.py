@@ -103,10 +103,10 @@ def main() -> int:
     window.video.frameSwapped.connect(uncloak)
     QTimer.singleShot(1000, uncloak)          # safety net if no frame arrives
     window.show()
-    if gif:
-        window.set_format("gif")
     if paths:
         window.open_path(Path(paths[0]))
+    if gif:          # after open_path: it sets the default format (T25)
+        window.set_format("gif")
     return app.exec()
 
 

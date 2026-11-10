@@ -8,28 +8,53 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton
 import theme
 from config import HOTKEY_ACTIONS, Config, display_key
 from version import APP_NAME, VERSION
-from widgets import Popover, Segmented, button, dim_label
+from widgets import CheckBox, Popover, Segmented, button, dim_label
 
 
 class SettingsPopover(Popover):
+    """T25 order: Playback → Quality → Speed → Default Format → Export → version.
+    Width follows the content (widest row + 16 px on both sides)."""
+
     def __init__(self, config: Config, parent=None):
         super().__init__("Settings", parent)
         self.config = config
-        self.setFixedWidth(312)
+        self._encoder_titles: list[QLabel] = []
+        self._encoder_hints: list[QLabel] = []
+
+        self.body.addWidget(QLabel("Playback"))
+        self.autoplay = CheckBox("Autoplay")
+        self.autoplay.setToolTip("Start playing when a file opens")
+        self.autoplay.toggled.connect(lambda on: config.set_flag("autoplay", on))
+        self.body.addWidget(self.autoplay)
+        self.body.addSpacing(10)
 
         self.quality = self._section("Quality", [
             ("high", "High", "CRF 18"),
             ("normal", "Medium", "CRF 20"),
             ("small", "Low", "CRF 25"),
-        ], "quality", hint="Higher quality — bigger file.")
+        ], "quality", hint="Higher quality — bigger file.", encoder=True)
         self.speed = self._section("Speed", [
             ("fast", "Fast", "x264 preset fast"),
             ("medium", "Medium", "x264 preset medium"),
             ("slow", "Slow", "x264 preset slow"),
-        ], "speed", hint="Slower — smaller file, same quality.")
-        self.save_to = self._section("Save to", [
-            ("same", "Same Folder", "Save next to the source as name.cut.mp4 / .gif"),
-            ("ask", "Ask", "Show a Save As dialog"),
+        ], "speed", hint="Slower — smaller file, same quality.", encoder=True)
+
+        self.body.addWidget(QLabel("Default Format"))
+        self.default_format = Segmented([
+            ("mp4", ".mp4", ""), ("gif", ".gif", ""), ("png", ".png", ""),
+            ("copy", "Original", "Source container, no re-encoding"),
+        ])
+        self.default_format.selected.connect(lambda v: config.set("default_format", v))
+        self.body.addWidget(self.default_format)
+        self.last_used = CheckBox("Last Used")
+        self.last_used.setToolTip("Open files with the format of the last export")
+        self.last_used.toggled.connect(lambda on: config.set_flag("last_used", on))
+        self.body.addWidget(self.last_used)
+        self.body.addSpacing(10)
+
+        self.save_to = self._section("Export", [
+            ("same", "Same Folder", "Save next to the source as name.cut.mp4"),
+            ("ask", "Ask", "Choose where to save each time"),
         ], "save_to", last=True)
 
         self.body.addSpacing(14)
@@ -41,21 +66,39 @@ class SettingsPopover(Popover):
         self.refresh()
 
     def _section(self, title: str, options, key: str, last: bool = False,
-                 hint: str = "") -> Segmented:
-        self.body.addWidget(QLabel(title))
+                 hint: str = "", encoder: bool = False) -> Segmented:
+        label = QLabel(title)
+        self.body.addWidget(label)
         seg = Segmented(options)
         seg.selected.connect(lambda value, k=key: self.config.set(k, value))
         self.body.addWidget(seg)
         if hint:                       # T26: one line under the buttons
-            self.body.addWidget(dim_label(hint))
+            hint_label = dim_label(hint)
+            self.body.addWidget(hint_label)
+            if encoder:
+                self._encoder_hints.append(hint_label)
+        if encoder:
+            self._encoder_titles.append(label)
         if not last:
             self.body.addSpacing(10)
         return seg
 
+    def set_encoder_enabled(self, enabled: bool) -> None:
+        """T16b: Quality/Speed are x264 settings — grey (whole section) for Original/.gif/.png."""
+        for seg in (self.quality, self.speed):
+            seg.setEnabled(enabled)
+        for label in self._encoder_titles:
+            label.setProperty("dim", not enabled)
+            theme.repolish(label)
+
     def refresh(self) -> None:
         for seg, key in ((self.quality, "quality"), (self.speed, "speed"),
-                         (self.save_to, "save_to")):
+                         (self.save_to, "save_to"), (self.default_format, "default_format")):
             seg.set_value(self.config.get(key))
+        self.autoplay.set_checked(self.config.flag("autoplay"))
+        last = self.config.flag("last_used")
+        self.last_used.set_checked(last)
+        self.default_format.setEnabled(not last)   # the picked one stays highlighted
 
 
 class KeyCap(QPushButton):

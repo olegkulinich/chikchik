@@ -6,12 +6,13 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QPoint, QPointF, QProcess, QRect, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QDesktopServices,
     QFontMetrics,
+    QImage,
     QKeySequence,
     QShortcut,
 )
@@ -41,11 +42,14 @@ from backend import (
     MediaInfo,
     SubtitleTrack,
     build_ffmpeg_command,
+    build_frame_command,
     build_gif_commands,
+    build_png_command,
     commit_output,
     format_fps,
     normalize_crop,
     palette_path,
+    png_pattern,
     probe_media,
     same_path,
     scaled_size,
@@ -53,7 +57,7 @@ from backend import (
     unique_path,
     validate_video,
 )
-from config import MENU_SHORTCUTS, SCALE_HOTKEYS, Config, display_key
+from config import FORMAT_HOTKEYS, MENU_SHORTCUTS, SCALE_HOTKEYS, Config, display_key
 from popovers import HotkeysPopover, SettingsPopover
 from video_view import VideoView
 from widgets import (
@@ -85,7 +89,7 @@ def format_scale(value: float) -> str:
     return f"{round(value, 2):g}x"
 
 
-FORMATS = ("mp4", "gif", "copy")
+FORMATS = ("mp4", "gif", "png", "copy")   # T25: same order everywhere; copy = Original
 EXACT_SCRUB_SPAN = 60.0   # s visible on the timeline or less → exact seeks while dragging
 
 
@@ -218,7 +222,8 @@ class MainWindow(QMainWindow):
         self.audio: AudioTrack | None = None
         self.subtitle: SubtitleTrack | None = None
         self.scale = 1.0
-        self.fmt = "mp4"                    # mp4 | gif | copy
+        self.fmt = "mp4"                    # mp4 | gif | png | copy (Original)
+        self._frame_process: QProcess | None = None
         self.fps_out: float | None = None   # None = source rate
         self.trim_in = 0.0
         self.trim_out = 0.0
@@ -367,10 +372,11 @@ class MainWindow(QMainWindow):
     def _install_menu_actions(self) -> None:
         handlers = {
             "hotkeys": lambda: self.hotkeys_popover.popup_over(self.video),
-            "settings": lambda: self.settings_popover.popup_over(self.video),
+            "settings": self._show_settings,
             "open": self.open_dialog,
             "export": self.export,
             "overwrite": self.overwrite,
+            "copy_frame": self.copy_frame,
             "quit": self.close,
         }
         for key, (_title, shortcut) in MENU_SHORTCUTS.items():
@@ -413,6 +419,9 @@ class MainWindow(QMainWindow):
         }
         for action_id, value in SCALE_HOTKEYS.items():
             handlers[action_id] = lambda v=value: self.set_scale(v) if self._editable() else None
+        for action_id, fmt in FORMAT_HOTKEYS.items():                   # T37
+            handlers[action_id] = lambda f=fmt: self.set_format(f, explain=True) \
+                if self._editable() else None
         for action_id, key in self.config.hotkeys().items():
             if not key:
                 continue
@@ -462,6 +471,7 @@ class MainWindow(QMainWindow):
         row("open", self.worker is None)
         row("export", loaded)
         row("overwrite", loaded)
+        row("copy_frame", self.info is not None)
         if self.info is not None:
             idle = self.worker is None
             menu.addSeparator()
@@ -514,7 +524,10 @@ class MainWindow(QMainWindow):
         self.crop_button.setChecked(False)
         self.video.set_crop(self.crop)
         self.video.load(path, (info.width, info.height),
-                        self.audio.number if self.audio else None, None)
+                        self.audio.number if self.audio else None, None,
+                        autoplay=self.config.flag("autoplay"))          # T35
+        start_format = self.config.start_format()                          # T25
+        self.fmt = start_format if start_format in FORMATS else "mp4"
         self.timeline.set_duration(info.duration, info.frame_duration)   # also resets zoom
         self._last_dims = None
 
@@ -821,11 +834,18 @@ class MainWindow(QMainWindow):
         return (self._effective_crop() is not None or self.scale != 1.0
                 or self._target_fps() is not None)
 
+    def _reencode_reason(self) -> str:
+        if self._effective_crop() is not None:
+            return "crop"
+        if self.scale != 1.0:
+            return "scale"
+        return "fps"
+
     def _reencode_changed(self, reason: str) -> None:
-        """Copy can't do crop/scale/fps → switch to .mp4 once and say why."""
+        """Original can't do crop/scale/fps → switch to .mp4 once and say why."""
         if self.fmt == "copy" and self._needs_reencode():
             self.set_format("mp4")
-            self.toast.show_message(f"Copy → .mp4: {reason} needs re-encoding",
+            self.toast.show_message(f"Original → .mp4: {reason} needs re-encoding",
                                     action=False, ms=4000)
 
     # =============================================================== fps
@@ -875,14 +895,20 @@ class MainWindow(QMainWindow):
     def _format_label(self, fmt: str) -> str:
         if fmt == "copy":
             suffix = self.source.suffix.lower() if self.source else ".mkv"
-            return f"Copy ({suffix})"
+            return f"Original ({suffix})"
         return f".{fmt}"
 
     def _show_format(self) -> None:
         self.format_button.setText(self._format_label(self.fmt))
 
-    def set_format(self, fmt: str) -> None:
-        if fmt not in FORMATS or (fmt == "copy" and self._needs_reencode()):
+    def set_format(self, fmt: str, explain: bool = False) -> None:
+        if fmt not in FORMATS:
+            return
+        if fmt == "copy" and self._needs_reencode():
+            if explain:      # T37: the hotkey must not fail silently
+                self.toast.show_message(
+                    f"Original unavailable: {self._reencode_reason()} needs re-encoding",
+                    action=False, ms=4000)
             return
         self.fmt = fmt
         self._show_format()
@@ -953,7 +979,7 @@ class MainWindow(QMainWindow):
             self.export()
 
     def _kind(self) -> str:
-        """mp4 | gif | copy — Copy falls back to mp4 if something needs re-encoding."""
+        """mp4 | gif | png | copy — Original falls back to mp4 if something needs re-encoding."""
         return "mp4" if self.fmt == "copy" and self._needs_reencode() else self.fmt
 
     def _suffix(self) -> str:
@@ -962,6 +988,9 @@ class MainWindow(QMainWindow):
 
     def export(self) -> None:
         if self.info is None or self.worker is not None:
+            return
+        if self._kind() == "png":
+            self._export_png()
             return
         kind, suffix = self._kind(), self._suffix()
         default = self.source.with_name(f"{self.source.stem}.cut{suffix}")
@@ -988,7 +1017,7 @@ class MainWindow(QMainWindow):
             self._error("Export", "GIF export writes a .gif file.")
             return
         if kind == "copy" and out_suffix != self.source.suffix.lower():
-            self._error("Export", f"Copy keeps the source container ({self.source.suffix}).")
+            self._error("Export", f"Original keeps the source container ({self.source.suffix}).")
             return
         if same_path(output, self.source):
             self.overwrite()
@@ -999,8 +1028,9 @@ class MainWindow(QMainWindow):
         if self.info is None or self.worker is not None:
             return
         kind = self._kind()
-        if kind == "gif":
-            self._error("Overwrite", "A GIF can't replace the source video.\nUse Export instead.")
+        if kind in ("gif", "png"):
+            what = "A GIF" if kind == "gif" else "A PNG sequence"
+            self._error("Overwrite", f"{what} can't replace the source video.\nUse Export instead.")
             return
         if kind == "mp4" and self.source.suffix.lower() not in PRECISE_CONTAINERS:
             self._error(
@@ -1028,10 +1058,17 @@ class MainWindow(QMainWindow):
         info = self.info
         kind = self._kind()
         start, duration = self._trim_range()
+        start_number = 0
+        if kind == "png":      # output = folder; frames are numbered by source frame (T19b)
+            fps = info.fps or 0.0
+            start_number = round(start * fps)
+            output.mkdir(parents=True, exist_ok=True)
+            output = png_pattern(output, self.source.stem, round(info.duration * fps))
         try:
             job = ExportJob(
                 source=self.source, info=info,
-                temporary_output=temporary_output(output), final_output=output,
+                temporary_output=output if kind == "png" else temporary_output(output),
+                final_output=output, start_number=start_number,
                 start=start, duration=duration, crop=self._effective_crop(),
                 fast=kind == "copy",
                 crf=self.config.crf, preset=self.config.preset,
@@ -1042,6 +1079,9 @@ class MainWindow(QMainWindow):
             )
             if kind == "gif":
                 commands, warning = build_gif_commands(job)
+            elif kind == "png":
+                command, warning = build_png_command(job)
+                commands = [command]
             else:
                 command, warning = build_ffmpeg_command(job)
                 commands = [command]
@@ -1070,6 +1110,9 @@ class MainWindow(QMainWindow):
             return
         if job.palette is not None:
             self._remove(job.palette)       # always: success, cancel or error
+        if job.kind == "png":
+            self._png_done(job, success, error)
+            return
 
         if not success:
             self._remove(job.temporary_output)
@@ -1110,6 +1153,88 @@ class MainWindow(QMainWindow):
             self.toast.show_message(f"Saved: {job.final_output.name}", action=True)
             self._toast_path = job.final_output
             self.video.seek(position)
+        self.config.set("last_format", job.kind)      # T25: Last Used
+
+    # --------------------------------------------------------- PNG (T19b)
+    def _export_png(self) -> None:
+        """Frames go straight into a folder: name.cut\\ next to the source, or a picked one."""
+        if self.config.get("save_to") == "same":
+            folder = self.source.with_name(f"{self.source.stem}.cut")
+            counter = 2
+            while folder.exists():
+                folder = self.source.with_name(f"{self.source.stem}.cut-{counter}")
+                counter += 1
+        else:
+            chosen = QFileDialog.getExistingDirectory(self, "Export PNG sequence to",
+                                                      str(self.source.parent))
+            if not chosen:
+                return
+            folder = Path(chosen)
+        self._start_export(folder, backup=False)
+
+    @staticmethod
+    def _png_frames(job: ExportJob) -> list[Path]:
+        folder = job.final_output.parent
+        prefix = job.final_output.name.split("%")[0]
+        return sorted(folder.glob(f"{prefix}*.png"))
+
+    def _png_done(self, job: ExportJob, success: bool, error: str) -> None:
+        folder = job.final_output.parent
+        count = len(self._png_frames(job))
+        self._toast_path = folder
+        if success:
+            self.toast.show_message(f"Saved: {folder.name} · {count} frames", action=True)
+            self.config.set("last_format", "png")
+            return
+        if count == 0:
+            try:
+                folder.rmdir()           # only if empty — never touches the user's files
+            except OSError:
+                pass
+        if error:
+            self._error("FFmpeg error", error)
+        elif count:
+            # T19c: frames written so far stay, like other programs do
+            self.toast.show_message(f"Export cancelled · {count} frames kept", action=True)
+        else:
+            self.toast.show_message("Export cancelled", action=False, ms=3000)
+
+    # ---------------------------------------------------- Copy Frame (T19a)
+    def copy_frame(self) -> None:
+        """Exact current frame → clipboard as PNG, with crop and scale. Runs in the
+        background (FFmpeg), the UI stays responsive."""
+        if self.info is None or self._frame_process is not None:
+            return
+        # mpv reports the frame's start; half a frame back keeps FFmpeg on the same frame.
+        time_pos = max(0.0, self._position() - self.info.frame_duration / 2)
+        command = build_frame_command(self.source, self.info, time_pos,
+                                      self._effective_crop(), self.scale)
+        process = QProcess(self)
+        process.setProgram(command[0])
+        process.setArguments(command[1:])
+        process.finished.connect(lambda *_: self._frame_copied(process))
+        process.errorOccurred.connect(lambda *_: self._frame_copied(process))
+        self._frame_process = process
+        process.start()
+
+    def _frame_copied(self, process: QProcess) -> None:
+        if self._frame_process is not process:
+            return
+        self._frame_process = None
+        data = bytes(process.readAllStandardOutput())
+        process.deleteLater()
+        image = QImage.fromData(data, "PNG")
+        if image.isNull():
+            self.toast.show_message("Could not copy the frame", action=False, error=True, ms=4000)
+            return
+        QApplication.clipboard().setImage(image)
+        self.toast.show_message(f"Frame copied · {image.width()}×{image.height()}",
+                                action=False, ms=2500)
+
+    def _show_settings(self) -> None:
+        # T16b: Quality/Speed only matter for x264 (.mp4)
+        self.settings_popover.set_encoder_enabled(self.info is None or self._kind() == "mp4")
+        self.settings_popover.popup_over(self.video)
 
     @staticmethod
     def _remove(path: Path) -> None:
