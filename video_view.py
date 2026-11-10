@@ -26,6 +26,7 @@ class VideoView(QOpenGLWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.frame_duration_s: float | None = None   # for frame-accurate seeks
         import mpv  # imported late so app.py can prepare the DLL path first
 
         self.setMinimumSize(320, 180)
@@ -187,8 +188,10 @@ class VideoView(QOpenGLWidget):
 
     # ------------------------------------------------------- control
     def load(self, path: Path, frame_size: tuple[int, int], aid: int | None,
-             sid: int | None = None, autoplay: bool = True) -> None:
+             sid: int | None = None, autoplay: bool = True,
+             frame_duration: float | None = None) -> None:
         self.frame_size = frame_size
+        self.frame_duration_s = frame_duration
         self.has_video = True
         self._in_flight = self._pending = None
         paused = not autoplay        # T35: off → the first frame, paused
@@ -230,7 +233,14 @@ class VideoView(QOpenGLWidget):
         return self.has_video and not self._state.get("pause") and not self._state.get("eof-reached")
 
     def seek(self, position: float, exact: bool = True) -> None:
-        """Queued: while a seek runs, only the latest request is kept."""
+        """Queued: while a seek runs, only the latest request is kept.
+
+        Exact seeks land on the nearest frame: mpv shows the first frame that starts
+        at or after the target, so aim a quarter frame before that frame's start
+        (otherwise a playhead between frames showed the next one)."""
+        fd = self.frame_duration_s
+        if exact and fd:
+            position = round(position / fd) * fd - fd / 4
         target = (max(0.0, position), exact)
         # Safety valve: if a restart event got lost, don't wait forever.
         if self._in_flight is not None and time.monotonic() - self._sent_at < 1.5:
@@ -267,6 +277,21 @@ class VideoView(QOpenGLWidget):
         if self._pending is not None:
             target, self._pending = self._pending, None
             self._send_seek(target)
+
+    def set_loop(self, enabled: bool, start: float | None = None, end: float | None = None) -> None:
+        """T21: loop the trim range (A–B) or, without one, the whole file."""
+        if not enabled:
+            self._command("set", "ab-loop-a", "no")
+            self._command("set", "ab-loop-b", "no")
+            self._command("set", "loop-file", "no")
+        elif start is None or end is None:
+            self._command("set", "ab-loop-a", "no")
+            self._command("set", "ab-loop-b", "no")
+            self._command("set", "loop-file", "inf")
+        else:
+            self._command("set", "loop-file", "no")
+            self._command("set", "ab-loop-a", f"{start:.6f}")
+            self._command("set", "ab-loop-b", f"{end:.6f}")
 
     def seek_relative(self, delta: float) -> None:
         self._command("seek", f"{delta:.6f}", "relative+exact")

@@ -239,6 +239,8 @@ class MainWindow(QMainWindow):
         self._hold_target = 0.0
         self._hold_until = 0.0
         self._edge_return: float | None = None
+        self._quiet = False                 # programmatic Trim/Crop toggles: no capture/reset
+        self._applying = False              # applying an undo step: no history writes
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(theme.emoji_icon())
@@ -262,6 +264,22 @@ class MainWindow(QMainWindow):
         self.poll.setInterval(30)
         self.poll.timeout.connect(self._poll)
         self.poll.start()
+
+        # T18: while the playhead is dragged by keyframes, a short pause → exact frame.
+        self._exact_timer = QTimer(self)
+        self._exact_timer.setSingleShot(True)
+        self._exact_timer.setInterval(150)
+        self._exact_timer.timeout.connect(self._scrub_rest)
+        self._scrub_t: float | None = None
+        self._kf_drag = False               # this drag used keyframe seeks
+
+        # T32: undo/redo of trim & crop
+        self._history: list[tuple] = []
+        self._hpos = 0
+        self._history_timer = QTimer(self)
+        self._history_timer.setSingleShot(True)
+        self._history_timer.setInterval(500)
+        self._history_timer.timeout.connect(self._history_commit)
 
         self._update_enabled()
         theme.dark_title_bar(self)
@@ -287,15 +305,21 @@ class MainWindow(QMainWindow):
         self.timeline = Timeline()
         self.timeline.seek_requested.connect(self._timeline_seek)
         self.timeline.edge_preview.connect(self._edge_preview)
-        self.timeline.in_dragged.connect(lambda t: self.set_in(t))
-        self.timeline.out_dragged.connect(lambda t: self.set_out(t))
+        self.timeline.in_dragged.connect(lambda t: self.set_in(t, step=False))
+        self.timeline.out_dragged.connect(lambda t: self.set_out(t, step=False))
         self.time_field = Field("⌛", 110)   # emoji, like the app icon
         self.time_field.setToolTip("Current time")
         self.time_field.setText("00:00.000")
         self.time_field.committed.connect(self._time_field_committed)
         self.time_field.nudged.connect(self._nudge_position)
         self.time_field.scrub_started.connect(self.video.pause)
+        self.time_field.ctrl_click = True
+        self.time_field.ctrl_clicked.connect(self.toggle_frames_mode)          # T39
         transport.addWidget(self.play_button)
+        self.loop_button = button("∞", checkable=True, tooltip="Loop (L)")    # T21
+        self.loop_button.setFixedWidth(32)
+        self.loop_button.toggled.connect(lambda _on: self._update_loop())
+        transport.addWidget(self.loop_button)
         transport.addWidget(self.timeline, 1)
         transport.addWidget(self.time_field)
         root.addLayout(transport)
@@ -316,7 +340,13 @@ class MainWindow(QMainWindow):
         for field in (self.in_field, self.out_field):
             field.scrub_started.connect(self._begin_edge_preview)
             field.scrub_finished.connect(self._end_edge_preview)
-        bottom.addWidget(FieldGroup([self.in_field, self.out_field]))
+        self.d_field = Field("D", 114)                                         # T39
+        self.d_field.setToolTip("Duration — what will be exported")
+        self.d_field.committed.connect(self._duration_committed)
+        self.d_field.nudged.connect(self._nudge_duration)
+        self.d_field.scrub_started.connect(self._begin_edge_preview)
+        self.d_field.scrub_finished.connect(self._end_edge_preview)
+        bottom.addWidget(FieldGroup([self.in_field, self.out_field, self.d_field]))
         bottom.addSpacing(theme.GAP2 - theme.HGAP)   # T34b: 16 px between Trim and Crop
 
         self.crop_button = button("Crop", checkable=True,
@@ -353,7 +383,7 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.export_button)
         root.addLayout(bottom)
 
-        for field in (self.time_field, self.in_field, self.out_field, self.fps_field,
+        for field in (self.time_field, self.in_field, self.out_field, self.d_field, self.fps_field,
                       *self.crop_fields.values()):
             field.left.connect(lambda: self.video.setFocus())
 
@@ -415,6 +445,11 @@ class MainWindow(QMainWindow):
             "sec5_next": lambda: self.video.seek_relative(5.0),
             "sec5_prev": lambda: self.video.seek_relative(-5.0),
             "play": self.toggle_play,
+            "loop": lambda: self.loop_button.toggle() if self.info is not None else None,
+            "go_start": lambda: self._go_to(start=True),
+            "go_end": lambda: self._go_to(start=False),
+            "undo": self.undo,
+            "redo": self.redo,
             "trim_in": lambda: self.set_in(self._position()),
             "trim_out": lambda: self.set_out(self._position()),
         }
@@ -519,17 +554,19 @@ class MainWindow(QMainWindow):
         self.audio = info.default_audio()
         self.subtitle = None
         self.trim_in, self.trim_out = 0.0, info.duration
-        self.trim_button.setChecked(False)
+        self._set_checked(self.trim_button, False)
         self.fps_out = None
         self.crop = QRect(0, 0, info.width, info.height)
-        self.crop_button.setChecked(False)
+        self._set_checked(self.crop_button, False)
         self.video.set_crop(self.crop)
         self.video.load(path, (info.width, info.height),
                         self.audio.number if self.audio else None, None,
-                        autoplay=self.config.flag("autoplay"))          # T35
+                        autoplay=self.config.flag("autoplay"),          # T35
+                        frame_duration=info.frame_duration)
         start_format = self.config.start_format()                          # T25
         self.fmt = start_format if start_format in FORMATS else "mp4"
         self.timeline.set_duration(info.duration, info.frame_duration)   # also resets zoom
+        self.timeline.set_frames_mode(self.config.flag("frames_mode"))
         self._last_dims = None
 
         self.setWindowTitle(f"{APP_NAME} — {path.name}")   # T23: name only
@@ -538,6 +575,8 @@ class MainWindow(QMainWindow):
         self._show_fps()
         self._show_format()
         self._update_enabled()
+        self._update_loop()
+        self._history_reset()                                              # T32
         self.video.setFocus()
 
     def set_audio(self, track: AudioTrack | None) -> None:
@@ -588,7 +627,7 @@ class MainWindow(QMainWindow):
             self._hold_until = 0.0
         self.timeline.set_position(position)
         if not self.time_field.is_busy():
-            self.time_field.setText(format_time(position))
+            self.time_field.setText(self._fmt(position))
         dims = self.video.display_size()
         if dims != self._last_dims:
             self._last_dims = dims
@@ -598,11 +637,22 @@ class MainWindow(QMainWindow):
     def _timeline_seek(self, t: float, final: bool) -> None:
         """Playhead/time field follow every move; mpv seeks through its queue
         (one in flight, latest wins — never waits in the GUI thread); release → exact."""
-        self.time_field.setText(format_time(t))
+        t = self._snap(t)
+        self.timeline.show_position(t)
+        self.time_field.setText(self._fmt(t))
         if final:
+            self._exact_timer.stop()
             if self._scrub_active:
                 self._scrub_active = False
                 self.video.set_scrub_mode(False)
+            keyframes, self._kf_drag = self._kf_drag, False
+            self._scrub_t = None
+            if keyframes:
+                # T18: the frame found by eye stays — playhead/⌛ follow the picture
+                # (the poll syncs them once the last seek has landed), no exact jump.
+                self._hold_until = 0.0
+                self._follow_picture()
+                return
             self.video.seek(t, True)
             self._hold_target, self._hold_until = t, time.monotonic() + 0.5
             self._nudge_target, self._nudge_stamp = t, time.monotonic()
@@ -614,55 +664,117 @@ class MainWindow(QMainWindow):
         # whole drag fits between two keyframes (anime/films: every 2–10 s) and the
         # picture wouldn't change — there, seek exactly (the queue keeps the UI smooth).
         exact = self.timeline.view_end - self.timeline.view_start <= EXACT_SCRUB_SPAN
+        moved = self._scrub_t is None or abs(t - self._scrub_t) >= self._step(False) / 2
+        self._scrub_t = t
+        if not moved:          # jitter under a frame: keep the rest timer running
+            return
         self.video.seek(t, exact)
+        if not exact:
+            self._kf_drag = True
+            self._exact_timer.start()     # T18: at rest the playhead moves to the picture
+
+    def _follow_picture(self) -> None:
+        """Playhead and ⌛ jump to the frame mpv shows (keyframe scrub)."""
+        if self.video.seek_busy():
+            QTimer.singleShot(30, self._follow_picture)
+            return
+        position = self.video.time_pos
+        if position is None:
+            return
+        self.timeline.show_position(position)
+        self.time_field.setText(self._fmt(position))
+        self._nudge_target, self._nudge_stamp = position, time.monotonic()
+
+    def _scrub_rest(self) -> None:
+        if self._scrub_t is not None and self.timeline.is_dragging():
+            self._follow_picture()
 
     # ============================================================== trim
     def _editable(self) -> bool:
         return self.info is not None and self.worker is None
 
+    def _set_checked(self, button_, checked: bool) -> None:
+        """Programmatic toggle: no capture/reset (T31), no history step."""
+        self._quiet = True
+        try:
+            button_.setChecked(checked)
+        finally:
+            self._quiet = False
+
+    def _visible_range(self) -> tuple[float, float]:
+        """T31: what the timeline shows (zoomed → the visible window, else the whole file)."""
+        tl = self.timeline
+        return self._snap(tl.view_start), self._snap(tl.view_end)
+
     def _trim_toggled(self, checked: bool) -> None:
+        if self.info is not None and not self._quiet:
+            self._history_flush(trim_on=not checked)
+            # T31: off → reset; on → take exactly what is visible (the view doesn't move)
+            if checked:
+                self.trim_in, self.trim_out = self._visible_range()
+            else:
+                self.trim_in, self.trim_out = 0.0, self.info.duration
+            self._show_times()
+            self._history_commit()
         self.timeline.set_trim_enabled(checked and self.info is not None)
+        self._show_times()
+        self._update_loop()
 
     def _enable_trim(self) -> None:
+        """Turn Trim on before editing an edge: captures the visible window (T31)."""
         if not self.trim_button.isChecked():
-            self.trim_button.setChecked(True)
+            self._set_checked(self.trim_button, True)
+            self.trim_in, self.trim_out = self._visible_range()
+            self.timeline.set_trim_enabled(True)
 
     def reset_trim(self) -> None:
         if not self._editable():
             return
+        self._history_flush()
         self.trim_in, self.trim_out = 0.0, self.info.duration
         self._show_times()
+        self._history_commit()
 
-    def set_in(self, value: float) -> None:
+    def set_in(self, value: float, step: bool = True) -> None:
         if not self._editable():
             return
-        value = max(0.0, min(self.info.duration, value))
+        if step:
+            self._history_flush()
+        self._enable_trim()
+        value = self._snap(value)
         if value >= self.trim_out:
             self.trim_out = self.info.duration
         self.trim_in = value
-        self._enable_trim()
         self._show_times()
+        if step:
+            self._history_commit()
 
-    def set_out(self, value: float) -> None:
+    def set_out(self, value: float, step: bool = True) -> None:
         if not self._editable():
             return
-        value = max(0.0, min(self.info.duration, value))
+        if step:
+            self._history_flush()
+        self._enable_trim()
+        value = self._snap(value)
         if value <= self.trim_in:
             self.trim_in = 0.0
         self.trim_out = value
-        self._enable_trim()
         self._show_times()
+        if step:
+            self._history_commit()
 
     def _time_committed(self, field: Field, text: str, is_in: bool) -> None:
         if self.info is None:
             return
-        value = parse_time(text)
+        self._enable_trim()
+        value = self._parse(text)
         other_ok = value is not None and (
             value < self.trim_out if is_in else value > self.trim_in
         )
         if value is None or value > self.info.duration or not other_ok:
             field.set_error(True)
             return
+        value = self._snap(value)
         field.set_error(False)
         if is_in:
             self.trim_in = value
@@ -671,17 +783,28 @@ class MainWindow(QMainWindow):
         self._enable_trim()
         self._show_times()
         self._show_at(value)
+        self._history_commit()
+
+    def _snap(self, t: float) -> float:
+        """Nearest frame start — the playhead, trim edges and seeks sit on frames, so
+        the picture always matches the playhead (no shift after stopping)."""
+        if self.info is None:
+            return t
+        fd = self._step(False)
+        return max(0.0, min(self.info.duration, round(t / fd) * fd))
 
     def _step(self, coarse: bool) -> float:
+        frame = self.info.frame_duration if self.info and self.info.frame_duration else 1 / 30
         if coarse:
-            return 1.0
-        return self.info.frame_duration if self.info and self.info.frame_duration else 1 / 30
+            return 10 * frame if self._frames_mode() else 1.0      # T39: Shift = 10 frames
+        return frame
 
     def _nudge_trim(self, is_in: bool, steps: int, coarse: bool) -> None:
         if self.info is None:
             return
         frame = self._step(False)
         delta = steps * self._step(coarse)
+        self._enable_trim()
         if is_in:
             self.trim_in = max(0.0, min(self.trim_in + delta, self.trim_out - frame))
             target = self.trim_in
@@ -694,8 +817,9 @@ class MainWindow(QMainWindow):
 
     def _show_at(self, t: float) -> None:
         """Move the playhead/⌛ to t at once and seek there (mpv catches up)."""
+        t = self._snap(t)
         self.timeline.show_position(t)
-        self.time_field.setText(format_time(t))
+        self.time_field.setText(self._fmt(t))
         self.video.seek(t, True)
         now = time.monotonic()
         self._hold_target, self._hold_until = t, now + 0.5
@@ -730,37 +854,232 @@ class MainWindow(QMainWindow):
         # mpv reports the new position with a delay — chain fast steps from the last target.
         chain = now - self._nudge_stamp < 0.6 or self.video.seek_busy()
         base = self._nudge_target if chain else self._position()
-        position = max(0.0, min(self.info.duration, base + steps * self._step(coarse)))
+        position = self._snap(base + steps * self._step(coarse))
         self._nudge_target, self._nudge_stamp = position, now
         self._hold_target, self._hold_until = position, now + 0.5
         self.timeline.set_position(position)
-        self.time_field.setText(format_time(position))
+        self.time_field.setText(self._fmt(position))
         self.video.seek(position)
 
     def _time_field_committed(self, text: str) -> None:
         if self.info is None:
             return
-        value = parse_time(text)
+        value = self._parse(text)
         if value is None or value > self.info.duration:
             self.time_field.set_error(True)
             return
         self.time_field.set_error(False)
-        self.time_field.setText(format_time(value))
+        value = self._snap(value)
+        self.time_field.setText(self._fmt(value))
         self._nudge_target, self._nudge_stamp = value, time.monotonic()
         self.video.seek(value)
 
     def _show_times(self) -> None:
-        self.in_field.setText(format_time(self.trim_in))
-        self.out_field.setText(format_time(self.trim_out))
-        self.in_field.set_error(False)
-        self.out_field.set_error(False)
+        self.in_field.setText(self._fmt(self.trim_in))
+        self.out_field.setText(self._fmt(self.trim_out))
+        if self.info is not None:
+            self.d_field.setText(self._fmt_length(self._trim_range()[1]))
+        else:
+            self.d_field.setText(self._fmt(0.0))
+        for field in (self.in_field, self.out_field, self.d_field):
+            field.set_error(False)
         self.timeline.set_range(self.trim_in, self.trim_out)
+        if self.loop_button.isChecked():
+            self._update_loop()
+        self._history_touch()
+
+    # ------------------------------------------------- Duration (T39)
+    def _set_duration(self, length: float) -> None:
+        """D edits move Out; In stays. Length = what's exported (Out frame included)."""
+        if not self._editable():
+            return
+        if not self.trim_button.isChecked():
+            self._enable_trim()
+            self.trim_in = self._snap(self.timeline.position)    # D with Trim off: from the playhead
+        frame = self._step(False)
+        length = max(frame, length)
+        self.trim_out = self._snap(max(self.trim_in, min(self.info.duration, self.trim_in + length - frame)))
+        self._show_times()
+        self._show_at(self.trim_out)
+
+    def _duration_committed(self, text: str) -> None:
+        if self.info is None:
+            return
+        value = self._parse(text, length=True)
+        if value is None or value <= 0:
+            self.d_field.set_error(True)
+            return
+        self._history_flush()
+        self._set_duration(value)
+        self._history_commit()
+
+    def _nudge_duration(self, steps: int, coarse: bool) -> None:
+        if self.info is None:
+            return
+        self._set_duration(self._trim_range()[1] + steps * self._step(coarse))
+
+    # --------------------------------------------- frames mode (T39)
+    def _frames_mode(self) -> bool:
+        return self.config.flag("frames_mode")
+
+    def toggle_frames_mode(self) -> None:
+        self.config.set_flag("frames_mode", not self._frames_mode())
+        self.timeline.set_frames_mode(self._frames_mode())
+        self._show_times()
+        self.time_field.setText(self._fmt(self.timeline.position))
+
+    def _frame_of(self, t: float) -> int:
+        return round(t / self._step(False))
+
+    def _fmt(self, t: float) -> str:
+        """Timecode, or the frame number (0-based, source fps) in frames mode."""
+        if self._frames_mode() and self.info is not None:
+            return str(self._frame_of(t))
+        return format_time(t)
+
+    def _fmt_length(self, length: float) -> str:
+        if self._frames_mode() and self.info is not None:
+            return str(max(1, round(length / self._step(False))))   # frames that get exported
+        return format_time(length)
+
+    def _parse(self, text: str, length: bool = False) -> float | None:
+        """Frames mode: "120" or "120f" → frame 120; with ":" it's a timecode anyway."""
+        cleaned = text.strip().lower().rstrip("f").strip()
+        if self.info is not None and self._frames_mode() and ":" not in cleaned:
+            try:
+                frames = float(cleaned.replace(",", "."))
+            except ValueError:
+                return None
+            if frames < 0:
+                return None
+            return frames * self._step(False)
+        return parse_time(text if not text.strip().lower().endswith("f") else cleaned)
+
+    # ------------------------------------------------- Home/End (T41)
+    def _go_to(self, start: bool) -> None:
+        """Start/end of the trim range (or the file); playback keeps its state."""
+        if self.info is None:
+            return
+        if self.trim_button.isChecked():
+            t = self.trim_in if start else self.trim_out
+        else:
+            t = 0.0 if start else max(0.0, self.info.duration - self._step(False))
+        t = self._snap(t)
+        self.timeline.show_position(t)
+        self.time_field.setText(self._fmt(t))
+        self.video.seek(t, True)
+        now = time.monotonic()
+        self._hold_target, self._hold_until = t, now + 0.5
+        self._nudge_target, self._nudge_stamp = t, now
+
+    # ------------------------------------------------------ Loop (T21)
+    def _update_loop(self) -> None:
+        if self.info is None:
+            return
+        if not self.loop_button.isChecked():
+            self.video.set_loop(False)
+        elif self.trim_button.isChecked():
+            start, length = self._trim_range()
+            self.video.set_loop(True, start, start + length)
+        else:
+            self.video.set_loop(True)
+
+    # ------------------------------------------------- Undo/Redo (T32)
+    HISTORY_DEPTH = 20
+
+    def _snapshot(self, trim_on: bool | None = None, crop_on: bool | None = None) -> tuple:
+        r = self.crop
+        trim_on = self.trim_button.isChecked() if trim_on is None else trim_on
+        crop_on = self.crop_button.isChecked() if crop_on is None else crop_on
+        return (trim_on, round(self.trim_in, 6), round(self.trim_out, 6),
+                crop_on, r.x(), r.y(), r.width(), r.height())
+
+    def _history_reset(self) -> None:
+        self._history_timer.stop()
+        self._history = [self._snapshot()] if self.info is not None else []
+        self._hpos = 0
+
+    def _history_touch(self) -> None:
+        """Something changed: a step is written after ~0.5 s of calm with no mouse
+        button held — a drag or a run of arrow/wheel steps becomes one step."""
+        if not self._applying and self.info is not None and self._history:
+            self._history_timer.start()
+
+    def _history_flush(self, **before) -> None:
+        """Before a discrete action: a pending change (drag, arrows) becomes its own step.
+        `before`: button states from before a toggle (Qt flips them before `toggled`)."""
+        if self._history_timer.isActive():
+            self._history_commit(self._snapshot(**before))
+
+    def _history_commit(self, state: tuple | None = None) -> None:
+        if self._applying or self.info is None or not self._history:
+            return
+        if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            self._history_timer.start()            # still dragging — wait for the release
+            return
+        self._history_timer.stop()
+        state = state or self._snapshot()
+        if state == self._history[self._hpos]:
+            return
+        del self._history[self._hpos + 1:]         # a new action drops the redo branch
+        self._history.append(state)
+        if len(self._history) > self.HISTORY_DEPTH + 1:
+            del self._history[0]
+        self._hpos = len(self._history) - 1
+
+    def _history_apply(self, state: tuple) -> None:
+        trim_on, t_in, t_out, crop_on, x, y, w, h = state
+        self._applying = True
+        try:
+            self.trim_in, self.trim_out = t_in, t_out
+            self._set_checked(self.trim_button, trim_on)
+            self.timeline.set_trim_enabled(trim_on)
+            self.crop = QRect(x, y, w, h)
+            self._set_checked(self.crop_button, crop_on)
+            self.video.set_crop_enabled(crop_on)
+            self.video.set_crop(self.crop)
+            self._show_times()
+            self._show_crop()
+            self._update_loop()
+            self._reencode_changed("crop")
+        finally:
+            self._applying = False
+
+    def undo(self) -> None:
+        if not self._editable() or not self._history:
+            return
+        self._history_commit()                     # a pending change becomes a step first
+        if self._hpos > 0:
+            self._hpos -= 1
+            self._history_apply(self._history[self._hpos])
+
+    def redo(self) -> None:
+        if not self._editable() or not self._history:
+            return
+        self._history_commit()
+        if self._hpos < len(self._history) - 1:
+            self._hpos += 1
+            self._history_apply(self._history[self._hpos])
 
     # ============================================================== crop
     def _full_frame(self) -> QRect:
         return QRect(0, 0, self.info.width, self.info.height) if self.info else QRect()
 
+    def _visible_frame(self) -> QRect:
+        """T31: the visible part of the frame (canvas zoom comes with T20 — until then
+        the whole frame is always visible)."""
+        visible = getattr(self.video, "visible_frame_rect", None)
+        rect = visible() if visible else None
+        return QRect(rect) if rect else self._full_frame()
+
     def _crop_toggled(self, checked: bool) -> None:
+        if self.info is not None and not self._quiet:
+            self._history_flush(crop_on=not checked)
+            # T31: off → reset; on → take exactly the visible part of the frame
+            self.crop = self._visible_frame() if checked else self._full_frame()
+            self.video.set_crop(self.crop)
+            self._show_crop()
+            self._history_commit()
         self.video.set_crop_enabled(checked and self.info is not None)
         self._reencode_changed("crop")
 
@@ -768,18 +1087,23 @@ class MainWindow(QMainWindow):
         if self.worker is not None:
             self.video.set_crop(self.crop)
             return
+        self._history_flush()
         self.crop = rect
         self._show_crop()
         if not self.crop_button.isChecked():
-            self.crop_button.setChecked(True)     # dragging on the video turns Crop on
+            self._set_checked(self.crop_button, True)   # dragging on the video turns Crop on
+            self.video.set_crop_enabled(True)
         self._reencode_changed("crop")
+        self._history_commit()
 
     def reset_crop(self) -> None:
         if self.info is None:
             return
+        self._history_flush()
         self.crop = self._full_frame()
         self.video.set_crop(self.crop)
         self._show_crop()
+        self._history_commit()
 
     def _crop_field_committed(self, key: str, text: str) -> None:
         if self.info is None:
@@ -789,7 +1113,9 @@ class MainWindow(QMainWindow):
         except ValueError:
             self.crop_fields[key].set_error(True)
             return
+        self._history_flush()
         self._apply_crop_value(key, value)
+        self._history_commit()
 
     def _nudge_crop(self, key: str, steps: int, coarse: bool) -> None:
         if self.info is None:
@@ -812,7 +1138,8 @@ class MainWindow(QMainWindow):
         self.crop = r
         self.video.set_crop(r)
         if not self.crop_button.isChecked():
-            self.crop_button.setChecked(True)
+            self._set_checked(self.crop_button, True)
+            self.video.set_crop_enabled(True)
         self._show_crop()
         self._reencode_changed("crop")
 
@@ -822,6 +1149,7 @@ class MainWindow(QMainWindow):
         for key, field in self.crop_fields.items():
             field.setText(str(values.get(key, 0)))
             field.set_error(False)
+        self._history_touch()
 
     def _effective_crop(self, exact: bool | None = None) -> CropRect | None:
         """Crop for the export. H.264 (.mp4/Original) needs even geometry; PNG, GIF
@@ -1063,10 +1391,14 @@ class MainWindow(QMainWindow):
         info = self.info
         kind = self._kind()
         start, duration = self._trim_range()
+        if start > 0 and kind != "copy":
+            # FFmpeg starts at the first frame at/after -ss: aim a bit early → the In frame
+            quarter = info.frame_duration / 4
+            start, duration = start - quarter, duration
         start_number = 0
         if kind == "png":      # output = folder; frames are numbered by source frame (T19b)
             fps = info.fps or 0.0
-            start_number = round(start * fps)
+            start_number = round(start * fps)          # rounds back to the In frame
             output.mkdir(parents=True, exist_ok=True)
             output = png_pattern(output, self.source.stem, round(info.duration * fps))
         try:
@@ -1266,7 +1598,7 @@ class MainWindow(QMainWindow):
     def _update_enabled(self) -> None:
         loaded = self.info is not None
         idle = self.worker is None
-        for widget in (self.in_field, self.out_field, *self.crop_fields.values()):
+        for widget in (self.in_field, self.out_field, self.d_field, *self.crop_fields.values()):
             widget.setEnabled(loaded and idle)
         self.fps_field.setEnabled(loaded and idle and bool(self.info and self.info.fps))
         self.time_field.setEnabled(loaded)

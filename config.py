@@ -18,6 +18,7 @@ DEFAULTS = {
     "default_format": "mp4", # T25: mp4 | gif | png | copy (Original)
     "last_used": "0",        # T25: open with the format of the last export
     "last_format": "",       # T25: format of the last successful export
+    "frames_mode": "0",      # T39: show frames instead of timecode
 }
 
 
@@ -42,6 +43,11 @@ HOTKEY_ACTIONS = (
     HotkeyAction("sec5_next", "Jump Forward 5 sec", "Shift+Right"),
     HotkeyAction("sec5_prev", "Jump Backward 5 sec", "Shift+Left"),
     HotkeyAction("play", "Play/Pause", "Space"),
+    HotkeyAction("loop", "Loop", "L"),                       # T21
+    HotkeyAction("go_start", "Go to Start", "Home"),         # T41
+    HotkeyAction("go_end", "Go to End", "End"),              # T41
+    HotkeyAction("undo", "Undo", "Ctrl+Z"),                  # T32
+    HotkeyAction("redo", "Redo", "Ctrl+Shift+Z"),            # T32
     # Key N = 1/N; 0.75x has no key (menu only).
     HotkeyAction("scale_1", "Scale 1x", "1"),
     HotkeyAction("scale_2", "Scale 0.5x", "2"),
