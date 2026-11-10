@@ -47,6 +47,7 @@ from backend import (
     build_png_command,
     commit_output,
     format_fps,
+    clamp_crop,
     normalize_crop,
     palette_path,
     png_pattern,
@@ -822,13 +823,17 @@ class MainWindow(QMainWindow):
             field.setText(str(values.get(key, 0)))
             field.set_error(False)
 
-    def _effective_crop(self) -> CropRect | None:
+    def _effective_crop(self, exact: bool | None = None) -> CropRect | None:
+        """Crop for the export. H.264 (.mp4/Original) needs even geometry; PNG, GIF
+        and Copy Frame take the exact pixels (W 741 stays 741)."""
         if self.info is None or not self.crop_button.isChecked() or self.crop == self._full_frame():
             return None
-        return normalize_crop(
-            CropRect(self.crop.x(), self.crop.y(), self.crop.width(), self.crop.height()),
-            self.info.width, self.info.height,
-        )
+        if exact is None:
+            exact = self.fmt in ("gif", "png")      # not _kind(): it calls back here
+        rect = CropRect(self.crop.x(), self.crop.y(), self.crop.width(), self.crop.height())
+        if exact:
+            return clamp_crop(rect, self.info.width, self.info.height)
+        return normalize_crop(rect, self.info.width, self.info.height)
 
     def _needs_reencode(self) -> bool:
         return (self._effective_crop() is not None or self.scale != 1.0
@@ -1174,9 +1179,14 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _png_frames(job: ExportJob) -> list[Path]:
+        # No glob: names like "[VCB-Studio] …" contain [ ] — glob wildcards.
         folder = job.final_output.parent
         prefix = job.final_output.name.split("%")[0]
-        return sorted(folder.glob(f"{prefix}*.png"))
+        try:
+            return sorted(p for p in folder.iterdir()
+                          if p.name.startswith(prefix) and p.suffix.lower() == ".png")
+        except OSError:
+            return []
 
     def _png_done(self, job: ExportJob, success: bool, error: str) -> None:
         folder = job.final_output.parent
@@ -1208,7 +1218,7 @@ class MainWindow(QMainWindow):
         # mpv reports the frame's start; half a frame back keeps FFmpeg on the same frame.
         time_pos = max(0.0, self._position() - self.info.frame_duration / 2)
         command = build_frame_command(self.source, self.info, time_pos,
-                                      self._effective_crop(), self.scale)
+                                      self._effective_crop(exact=True), self.scale)
         process = QProcess(self)
         process.setProgram(command[0])
         process.setArguments(command[1:])

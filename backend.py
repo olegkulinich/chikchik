@@ -361,6 +361,16 @@ def normalize_crop(crop: CropRect, frame_width: int, frame_height: int) -> CropR
     return CropRect(x=x, y=y, width=max(2, width), height=max(2, height))
 
 
+def clamp_crop(crop: CropRect, frame_width: int, frame_height: int) -> CropRect:
+    """Clamp only — exact pixels for RGB outputs (PNG, GIF, Copy Frame), which
+    don't need the even geometry of yuv420p."""
+    x = max(0, min(crop.x, frame_width - 1))
+    y = max(0, min(crop.y, frame_height - 1))
+    width = max(1, min(crop.width, frame_width - x))
+    height = max(1, min(crop.height, frame_height - y))
+    return CropRect(x=x, y=y, width=width, height=height)
+
+
 def scaled_size(width: int, height: int, scale: float) -> tuple[int, int]:
     """Output size after scaling, rounded to even numbers (yuv420p)."""
     def even(value: float) -> int:
