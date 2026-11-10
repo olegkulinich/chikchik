@@ -338,9 +338,10 @@ class VideoView(QOpenGLWidget):
             pass
 
     # ------------------------------------------------------- control
-    def load(self, path: Path, frame_size: tuple[int, int], aid: int | None,
+    def load(self, path: Path | str, frame_size: tuple[int, int], aid: int | None,
              sid: int | None = None, autoplay: bool = True,
-             frame_duration: float | None = None) -> None:
+             frame_duration: float | None = None, sequence_fps: float | None = None) -> None:
+        """`path` may be an mpv URL (T36: mf://@list for an image sequence)."""
         self.frame_size = frame_size
         self.frame_duration_s = frame_duration
         self.has_video = True
@@ -349,11 +350,21 @@ class VideoView(QOpenGLWidget):
         paused = not autoplay        # T35: off → the first frame, paused
         self._state.update({"time-pos": None, "eof-reached": False, "pause": paused})
         self.player.pause = paused   # before loadfile: mpv shows frame 1 and waits
+        if sequence_fps:
+            self._set_option("mf-fps", f"{sequence_fps:.6f}")
+        self._set_option("alpha", "blend")          # transparency over black (mpv ≤ 0.37)
+        self._set_option("background", "color")    # the same for mpv ≥ 0.38
         self.player.command("loadfile", str(path), "replace")
         self.set_audio(aid)
         self.set_subtitle(sid)
         self.player.pause = paused
         self.update()
+
+    def _set_option(self, name: str, value: str) -> None:
+        try:
+            self.player[name] = value
+        except Exception:
+            pass                     # option renamed or missing in this libmpv
 
     def set_audio(self, aid: int | None) -> None:
         try:

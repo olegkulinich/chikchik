@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
+import tempfile
 import shutil
 import subprocess
 import sys
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -78,6 +81,83 @@ class SubtitleTrack:
         return text
 
 
+# ------------------------------------------------------------ sequences (T36)
+
+SEQUENCE_EXTENSIONS = (".png", ".jpg", ".jpeg")
+SEQUENCE_FPS = 25.0
+_TRAILING_NUMBER = re.compile(r"^(.*?)(\d+)$")
+
+
+@dataclass(frozen=True)
+class ImageSequence:
+    """PNG/JPG frames numbered in the name. Gaps are glued: frame i = files[i]."""
+    files: tuple[Path, ...]
+    numbers: tuple[int, ...]       # the number in each file name
+    prefix: str                    # name before the number ("shot_")
+    digits: int                    # width of the number in the first file
+    suffix: str                    # ".png"
+
+    @property
+    def display_name(self) -> str:
+        """shot_####.png — how compositing apps show a sequence."""
+        return f"{self.prefix}{'#' * self.digits}{self.suffix}"
+
+    @property
+    def stem(self) -> str:
+        """Base for export names: "shot_" → "shot" (an all-number name → "sequence")."""
+        return self.prefix.rstrip(" ._-") or "sequence"
+
+    def missing(self) -> list[tuple[int, int]]:
+        """Gaps as (first, last) number ranges."""
+        gaps = []
+        for a, b in zip(self.numbers, self.numbers[1:]):
+            if b - a > 1:
+                gaps.append((a + 1, b - 1))
+        return gaps
+
+
+def find_sequence(path: Path) -> ImageSequence:
+    """Any frame → the whole sequence: same folder, prefix and extension, a number at
+    the end of the name (any start, any zero padding). A name without a number → one
+    frame."""
+    suffix = path.suffix
+    match = _TRAILING_NUMBER.match(path.stem)
+    if not match:
+        return ImageSequence((path,), (0,), path.stem, 0, suffix)
+    prefix = match.group(1)
+    found: list[tuple[int, Path]] = []
+    pattern = re.compile(re.escape(prefix) + r"(\d+)$", re.IGNORECASE)
+    try:
+        entries = list(os.scandir(path.parent))
+    except OSError:
+        entries = []
+    for entry in entries:
+        name, ext = os.path.splitext(entry.name)
+        if ext.lower() != suffix.lower() or not entry.is_file():
+            continue
+        m = pattern.match(name)
+        if m:
+            found.append((int(m.group(1)), Path(entry.path)))
+    if not found:
+        found = [(int(match.group(2)), path)]
+    found.sort(key=lambda item: item[0])
+    return ImageSequence(
+        files=tuple(f for _, f in found), numbers=tuple(n for n, _ in found),
+        prefix=prefix, digits=len(match.group(2)), suffix=suffix,
+    )
+
+
+def is_image(path: Path) -> bool:
+    return path.suffix.lower() in SEQUENCE_EXTENSIONS
+
+
+def format_ranges(ranges: list[tuple[int, int]], limit: int = 3) -> str:
+    """1012–1015, 1020 (+2 more)"""
+    parts = [f"{a}–{b}" if b > a else f"{a}" for a, b in ranges[:limit]]
+    more = len(ranges) - limit
+    return ", ".join(parts) + (f" (+{more} more)" if more > 0 else "")
+
+
 @dataclass(frozen=True)
 class MediaInfo:
     duration: float
@@ -93,6 +173,13 @@ class MediaInfo:
     color_range: str
     audio: tuple[AudioTrack, ...] = field(default_factory=tuple)
     subtitles: tuple[SubtitleTrack, ...] = field(default_factory=tuple)
+    sequence: ImageSequence | None = None      # T36: PNG/JPG frames instead of a file
+
+    @property
+    def alpha(self) -> bool:
+        """Sequences with transparency are shown and exported over black."""
+        return self.sequence is not None and ("a" in self.pix_fmt.replace("gray", "")
+                                              or self.pix_fmt.startswith("ya"))
 
     @property
     def hdr(self) -> bool:
@@ -320,6 +407,60 @@ def probe_media(path: Path) -> MediaInfo:
     )
 
 
+def probe_sequence(sequence: ImageSequence, fps: float = SEQUENCE_FPS) -> MediaInfo:
+    """T36: size/pixel format from the first frame; length = frames / fps."""
+    result = _run([
+        executable("ffprobe"), "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,pix_fmt,codec_name", "-of", "json",
+        str(sequence.files[0]),
+    ])
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "FFprobe could not open the image")
+    streams = json.loads(result.stdout).get("streams", [])
+    if not streams:
+        raise RuntimeError("No image found")
+    image = streams[0]
+    return MediaInfo(
+        duration=len(sequence.files) / fps, width=int(image.get("width") or 0),
+        height=int(image.get("height") or 0), fps=fps,
+        codec=str(image.get("codec_name") or "png"), video_index=0,
+        pix_fmt=str(image.get("pix_fmt") or ""), color_transfer="", color_primaries="",
+        color_space="", color_range="", sequence=sequence,
+    )
+
+
+def with_fps(info: MediaInfo, fps: float) -> MediaInfo:
+    """The same sequence at another rate."""
+    return replace(info, fps=fps, duration=len(info.sequence.files) / fps)
+
+
+def _concat_escape(path: Path) -> str:
+    return str(path).replace("\\", "/").replace("'", "'\\''")
+
+
+def sequence_list(sequence: ImageSequence, first: int, count: int, fps: float) -> Path:
+    """FFmpeg concat list of frames [first, first + count) — the exact frames, glued
+    over gaps, each 1/fps long. (The usual trick of repeating the last file adds a
+    frame; the output is cut with -frames:v instead.)"""
+    files = sequence.files[first:first + count]
+    lines = []
+    for f in files:
+        lines.append(f"file '{_concat_escape(f)}'")
+        lines.append(f"duration {1.0 / fps:.9f}")
+    handle, name = tempfile.mkstemp(prefix="chikchik-seq-", suffix=".txt")
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        stream.write("ffconcat version 1.0\n" + "\n".join(lines) + "\n")
+    return Path(name)
+
+
+def mpv_list(sequence: ImageSequence) -> Path:
+    """mpv mf://@list — one frame path per line."""
+    handle, name = tempfile.mkstemp(prefix="chikchik-mf-", suffix=".txt")
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        stream.write("\n".join(str(f) for f in sequence.files) + "\n")
+    return Path(name)
+
+
 def validate_video(path: Path) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         raise RuntimeError("FFmpeg did not create the output file")
@@ -389,6 +530,9 @@ def video_filters(info: MediaInfo, crop: CropRect | None, scale: float = 1.0,
                   fps: float | None = None, gif: bool = False) -> tuple[list[str], list[str], str]:
     """Return (filters, color tag args, warning)."""
     filters: list[str] = []
+    if info.alpha:
+        # T36: transparent frames over black — premultiplied color is black where alpha is 0
+        filters += ["premultiply=inplace=1", "format=rgb24"]
     if fps:
         filters.append(f"fps={format_fps(fps)}")   # first: fewer frames for everything after
     if crop:
@@ -458,9 +602,12 @@ def build_ffmpeg_command(job: ExportJob) -> tuple[list[str], str]:
         "-progress", "pipe:1",
         "-nostats",
     ]
-    if job.start > 0:
-        command += ["-ss", seconds(job.start)]
-    command += ["-i", str(job.source), "-t", seconds(job.duration)]
+    if job.info.sequence is not None:
+        command += _input_args(job)
+    else:                                    # unchanged for files (frame-exact, checked)
+        if job.start > 0:
+            command += ["-ss", seconds(job.start)]
+        command += ["-i", str(job.source), "-t", seconds(job.duration)]
 
     command += ["-map", f"0:{job.info.video_index}"]
     if job.audio is not None:
@@ -497,6 +644,8 @@ def build_ffmpeg_command(job: ExportJob) -> tuple[list[str], str]:
             "-map_chapters", "-1",
         ]
 
+    if job.info.sequence is not None and not job.fps:
+        command += ["-r", format_fps(job.info.fps)]     # constant rate from the frame list
     if suffix in (".mp4", ".m4v", ".mov"):
         command += ["-movflags", "+faststart"]
 
@@ -504,7 +653,20 @@ def build_ffmpeg_command(job: ExportJob) -> tuple[list[str], str]:
     return command, warning
 
 
+def sequence_range(info: MediaInfo, start: float, duration: float) -> tuple[int, int]:
+    """(first frame index, frame count) of a time range in a sequence."""
+    total = len(info.sequence.files)
+    first = max(0, min(total - 1, int(math.floor(start * info.fps + 0.5))))
+    count = max(1, min(total - first, int(round(duration * info.fps))))
+    return first, count
+
+
 def _input_args(job: ExportJob) -> list[str]:
+    if job.info.sequence is not None:
+        # T36: exactly the frames of the range, no seeking
+        first, count = sequence_range(job.info, job.start, job.duration)
+        listing = sequence_list(job.info.sequence, first, count, job.info.fps)
+        return ["-f", "concat", "-safe", "0", "-i", str(listing)]
     args = ["-ss", seconds(job.start)] if job.start > 0 else []
     return args + ["-t", seconds(job.duration), "-i", str(job.source)]
 
@@ -559,6 +721,7 @@ def build_png_command(job: ExportJob) -> tuple[list[str], str]:
         "-map", f"0:{job.info.video_index}", "-an", "-sn",
         "-vf", ",".join(filters),
         "-start_number", str(job.start_number),
+        *(["-fps_mode", "passthrough"] if job.info.sequence is not None else []),
         "-f", "image2", "-y", str(job.final_output),
     ]
     return command, warning
@@ -569,9 +732,15 @@ def build_frame_command(source: Path, info: MediaInfo, time: float,
     """T19a: one exact frame as PNG on stdout (Copy Frame)."""
     filters, _tags, _warning = video_filters(info, crop, scale, None, gif=True)
     filters.append("format=rgb24")
+    if info.sequence is not None:          # T36: the frame's own file
+        files = info.sequence.files
+        index = max(0, min(len(files) - 1, int(math.floor(time * info.fps + 0.75))))
+        seek = ["-i", str(files[index])]
+    else:
+        seek = ["-ss", seconds(time), "-i", str(source)]
     return [
         executable("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-ss", seconds(time), "-i", str(source),
+        *seek,
         "-map", f"0:{info.video_index}", "-an", "-sn",
         "-vf", ",".join(filters), "-frames:v", "1",
         "-f", "image2pipe", "-c:v", "png", "-",
