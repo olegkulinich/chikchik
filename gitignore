@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PyInstaller / Inno Setup output (build.bat, installer.iss)
+build/
+dist/
+*.spec
+
+# Third-party binaries — downloaded for the build, shipped via Releases
+*.exe
+*.dll
+ffmpeg/
+LICENSE.LGPL
+
+# Logs and OS junk
+*.log
+Thumbs.db
+desktop.ini
+.DS_Store
