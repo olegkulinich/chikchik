@@ -250,12 +250,10 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(theme.emoji_icon())
         self.setAcceptDrops(True)
         self.setMinimumHeight(420)  # min width comes from the bottom row (~960 px)
-        self.resize(1100, 720)
-        if self.config.geometry() is not None:
-            self.restoreGeometry(self.config.geometry())
-
         # T22 fullscreen: panels float over the video and show on hover
+        self._ui_ready = False
         self._fullscreen = False
+        self._window_geometry = None        # saveGeometry() from before fullscreen
         self._was_maximized = False
         self._overlay = False
         self._overlay_shown = True
@@ -269,6 +267,14 @@ class MainWindow(QMainWindow):
         self._drag_offset = QPoint()
 
         self._build_ui()
+        # T22, Windows: an OpenGL window covering the whole monitor gets a DWM mode in
+        # which menus and dialogs open *behind* it. Qt's own fix — a 1 px border in
+        # fullscreen — is read from this property when the native window is created.
+        # The QWindow is replaced once the OpenGL video is embedded, so tag it after
+        # _build_ui (WA_NativeWindow makes the QWindow without creating the native one).
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+        if self.windowHandle() is not None:
+            self.windowHandle().setProperty("_q_has_border_in_fullscreen", True)
         self.settings_popover = SettingsPopover(self.config, self)
         self.hotkeys_popover = HotkeysPopover(self.config, self)
         self._install_menu_actions()
@@ -302,6 +308,12 @@ class MainWindow(QMainWindow):
         self._history_timer.timeout.connect(self._history_commit)
 
         self._update_enabled()
+        self._ui_ready = True
+        self.resize(1100, 720)
+        if self.config.geometry() is not None:
+            self.restoreGeometry(self.config.geometry())
+            if self.windowState() & Qt.WindowState.WindowFullScreen:   # never start fullscreen
+                self.setWindowState(self.windowState() & ~Qt.WindowState.WindowFullScreen)
         theme.dark_title_bar(self)
 
     # ================================================================ UI
@@ -1395,15 +1407,13 @@ class MainWindow(QMainWindow):
             self._leave_fullscreen(restore_maximized=True)
         else:
             self._was_maximized = self.isMaximized()
+            self._window_geometry = self.saveGeometry()
             self._fullscreen = True
             self.showFullScreen()
-            theme.border_in_fullscreen(self, True)
-            QTimer.singleShot(0, lambda: theme.border_in_fullscreen(self, self._fullscreen))
         self._apply_layout()
 
     def _leave_fullscreen(self, restore_maximized: bool) -> None:
         self._fullscreen = False
-        theme.border_in_fullscreen(self, False)
         if restore_maximized and self._was_maximized:
             self.showMaximized()
         else:
@@ -1460,6 +1470,8 @@ class MainWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
+        if not getattr(self, "_ui_ready", False):
+            return
         if event.type() == QEvent.Type.WindowStateChange and self._fullscreen \
                 and not self.isFullScreen() and not self.isMinimized():
             self._fullscreen = False            # left by the system (e.g. Win+↓)
@@ -1868,7 +1880,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if self.toast.isVisible():
+        if getattr(self, "_ui_ready", False) and self.toast.isVisible():
             self.toast.reposition()
 
     def dragEnterEvent(self, event) -> None:
@@ -1892,9 +1904,10 @@ class MainWindow(QMainWindow):
                 self._remove(self.job.temporary_output)
                 if self.job.palette is not None:
                     self._remove(self.job.palette)
-        if self._fullscreen:                 # T22: fullscreen isn't remembered
-            self._leave_fullscreen(restore_maximized=True)
-        self.config.set_geometry(self.saveGeometry())
+        if self._fullscreen and self._window_geometry is not None:
+            self.config.set_geometry(self._window_geometry)   # T22: fullscreen isn't remembered
+        else:
+            self.config.set_geometry(self.saveGeometry())
         self.poll.stop()
         self.video.shutdown()
         event.accept()
