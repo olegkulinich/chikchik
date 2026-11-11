@@ -300,7 +300,7 @@ class _TitleStrip(QWidget):
         layout.setContentsMargins(12, 0, 0, 0)
         layout.setSpacing(8)
         icon = QLabel()
-        icon.setPixmap(theme.emoji_icon().pixmap(16, 16))
+        icon.setPixmap(theme.app_icon().pixmap(16, 16))
         layout.addWidget(icon)
         self.title = dim_label(window.windowTitle())
         self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -419,7 +419,7 @@ class MainWindow(QMainWindow):
         self._applying = False              # applying an undo step: no history writes
 
         self.setWindowTitle(APP_NAME)
-        self.setWindowIcon(theme.emoji_icon())
+        self.setWindowIcon(theme.app_icon())
         self.setAcceptDrops(True)
         self.setMinimumHeight(420)  # min width comes from the bottom row (~960 px)
         # T22 fullscreen: panels float over the video and show on hover

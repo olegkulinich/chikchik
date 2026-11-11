@@ -6,6 +6,7 @@ from PySide6.QtGui import QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QWidget)
 
+import context_menu
 import theme
 from config import HOTKEY_ACTIONS, Config, display_key
 from version import APP_NAME, VERSION
@@ -56,7 +57,18 @@ class SettingsPopover(Popover):
         self.save_to = self._section("Export", [
             ("same", "Same Folder", "Save next to the source as name.cut.mp4"),
             ("ask", "Ask", "Choose where to save each time"),
-        ], "save_to", last=True)
+        ], "save_to", last=not context_menu.ENABLED)
+
+        # T30: Explorer right-click items, applied at once (Windows only)
+        self.explorer: dict[str, CheckBox] = {}
+        if context_menu.ENABLED:
+            self.body.addWidget(QLabel("Explorer Menu"))
+            for item, title in (("main", "ChikChik!"), ("gif", "ChikChik! → GIF")):
+                box = CheckBox(title)
+                box.setToolTip("Right-click menu of video files")
+                box.toggled.connect(lambda on, i=item: self._explorer_toggled(i, on))
+                self.body.addWidget(box)
+                self.explorer[item] = box
 
         self.body.addSpacing(14)
         version = dim_label(f"{APP_NAME} {VERSION}")
@@ -84,6 +96,13 @@ class SettingsPopover(Popover):
             self.body.addSpacing(10)
         return seg
 
+    def _explorer_toggled(self, item: str, on: bool) -> None:
+        try:
+            context_menu.set_installed(item, on)
+        except OSError:
+            pass
+        self.explorer[item].set_checked(context_menu.is_installed(item))
+
     def set_encoder_enabled(self, enabled: bool) -> None:
         """T16b: Quality/Speed are x264 settings — grey (whole section) for Original/.gif/.png."""
         for seg in (self.quality, self.speed):
@@ -100,6 +119,12 @@ class SettingsPopover(Popover):
         last = self.config.flag("last_used")
         self.last_used.set_checked(last)
         self.default_format.setEnabled(not last)   # the picked one stays highlighted
+        for item, box in self.explorer.items():     # the registry is the truth
+            box.set_checked(context_menu.is_installed(item))
+
+    def popup_over(self, widget) -> None:
+        self.refresh()
+        super().popup_over(widget)
 
 
 class KeyCap(QPushButton):
