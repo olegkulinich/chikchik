@@ -1926,11 +1926,6 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.WindowStateChange:
             self.title_strip.sync()
             self._apply_pin()          # T45: fullscreen in/out must not drop it
-            full = self._fullscreen and self.isFullScreen()
-            win_frame.set_border_black(self.winId(), full)
-            win_frame.set_nc_rendering(self.winId(), dwm_draws=not full)
-            if full:
-                win_frame.paint_frame_black(self.winId())
         if event.type() == QEvent.Type.WindowStateChange and self._fullscreen \
                 and not self.isFullScreen() and not self.isMinimized():
             self._fullscreen = False            # left by the system (e.g. Win+↓)
@@ -2069,15 +2064,6 @@ class MainWindow(QMainWindow):
     RESIZE_BAND = 6          # px at the edges that resize the frameless window
 
     def nativeEvent(self, event_type, message):  # noqa: N802
-        if self._fullscreen and self.isFullScreen():
-            msg = win_frame.message(event_type, message)
-            if msg is not None and msg[0] == win_frame.WM_NCPAINT:
-                win_frame.paint_frame_black(msg[1])                  # 1 px frame: black
-                return True, 0
-            if msg is not None and msg[0] == win_frame.WM_NCACTIVATE:
-                result = win_frame.nc_activate(msg[1], msg[2])       # no grey repaint
-                win_frame.paint_frame_black(msg[1])
-                return True, result
         msg = win_frame.message(event_type, message) if not self._fullscreen else None
         if msg is not None and msg[0] == win_frame.WM_SIZING and win_frame.shift_down():
             if self._keep_aspect(int(msg[2]), msg[3]):                # T44
