@@ -1,31 +1,62 @@
-"""Add / remove 'Trim / Crop' and 'Trim / Crop → GIF' in the Explorer right-click menu (HKCU, no admin)."""
+"""T30: the Explorer right-click items "ChikChik!" and "ChikChik! → GIF" (HKCU, no admin).
+
+Used by Settings → Explorer Menu (applied at once) and from the command line in dev:
+    python context_menu.py install | uninstall
+The installer adds both on the first install, leaves the user's choice alone on updates
+and removes them on uninstall.
+"""
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
 
-if os.name != "nt":
-    raise SystemExit("Windows only")
-
-import winreg
+ENABLED = os.name == "nt"
+if ENABLED:
+    import winreg
 
 BASE_DIR = Path(__file__).resolve().parent
 EXTENSIONS = (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".mts", ".ts")
-# Key names keep the two items next to each other (Explorer sorts verbs by key name).
-MENU_ITEMS = (("QuickTrimCrop", "Trim / Crop", ""), ("QuickTrimCropGIF", "Trim / Crop → GIF", "--gif"))
 ROOT = r"Software\Classes\SystemFileAssociations"
+# id → (registry key, title, extra argument). The old key names stay: existing installs
+# keep working, and Explorer sorts verbs by key name, so the two items stay together.
+ITEMS = {
+    "main": ("QuickTrimCrop", "ChikChik!", ""),
+    "gif": ("QuickTrimCropGIF", "ChikChik! → GIF", "--gif"),
+}
 
 
-def target(flag: str = "") -> tuple[str, str]:
-    extra = f" {flag}" if flag else ""
-    packaged = BASE_DIR / "dist" / "ChikChik" / "ChikChik.exe"
-    if packaged.exists():
-        return f'"{packaged}"{extra} "%1"', str(packaged)
+def _program() -> tuple[str, Path]:
+    """(command prefix, folder with the icons)."""
+    if getattr(sys, "frozen", False):                      # installed ChikChik.exe
+        exe = Path(sys.executable)
+        return f'"{exe}"', exe.parent
     python = Path(sys.executable)
     pythonw = python.with_name("pythonw.exe")
     interpreter = pythonw if pythonw.exists() else python
-    return f'"{interpreter}" "{BASE_DIR / "app.py"}"{extra} "%1"', str(BASE_DIR / "icon.ico")
+    return f'"{interpreter}" "{BASE_DIR / "app.py"}"', BASE_DIR
+
+
+def _icon(item: str) -> str:
+    prefix, folder = _program()
+    if item == "gif":
+        for candidate in (folder / "gif.ico", folder / "icons" / "gif.ico"):
+            if candidate.exists():
+                return str(candidate)
+    if getattr(sys, "frozen", False):
+        return f"{sys.executable},0"
+    return str(BASE_DIR / "icon.ico")
+
+
+def is_installed(item: str) -> bool:
+    if not ENABLED:
+        return False
+    key_name = ITEMS[item][0]
+    try:
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"{ROOT}\.mp4\shell\{key_name}").Close()
+        return True
+    except OSError:
+        return False
 
 
 def _delete_tree(root, path: str) -> None:
@@ -42,30 +73,41 @@ def _delete_tree(root, path: str) -> None:
         pass
 
 
-def install() -> None:
-    for name, title, flag in MENU_ITEMS:
-        command, icon = target(flag)
-        for extension in EXTENSIONS:
-            key_path = rf"{ROOT}\{extension}\shell\{name}"
-            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
-                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, title)
-                if Path(icon).exists():
-                    winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
-            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path + r"\command", 0,
-                                    winreg.KEY_SET_VALUE) as key:
-                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
-        print(f"Added '{title}':", command)
-    print("For:", " ".join(EXTENSIONS))
+def set_installed(item: str, on: bool) -> None:
+    """Add or remove one item for all video extensions; Explorer picks it up at once."""
+    if not ENABLED:
+        return
+    key_name, title, flag = ITEMS[item]
+    prefix, _folder = _program()
+    command = f'{prefix}{" " + flag if flag else ""} "%1"'
+    icon = _icon(item)
+    for extension in EXTENSIONS:
+        key_path = rf"{ROOT}\{extension}\shell\{key_name}"
+        if not on:
+            _delete_tree(winreg.HKEY_CURRENT_USER, key_path)
+            continue
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, title)
+            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path + r"\command", 0,
+                                winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
+    _notify_explorer()
 
 
-def uninstall() -> None:
-    for name, title, _flag in MENU_ITEMS:
-        for extension in EXTENSIONS:
-            _delete_tree(winreg.HKEY_CURRENT_USER, rf"{ROOT}\{extension}\shell\{name}")
-        print(f"Removed '{title}'.")
+def _notify_explorer() -> None:
+    try:
+        import ctypes
+        ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)   # SHCNE_ASSOCCHANGED
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
+    if not ENABLED:
+        raise SystemExit("Windows only")
     if len(sys.argv) != 2 or sys.argv[1] not in ("install", "uninstall"):
         raise SystemExit("Usage:\n  python context_menu.py install\n  python context_menu.py uninstall")
-    install() if sys.argv[1] == "install" else uninstall()
+    for name in ITEMS:
+        set_installed(name, sys.argv[1] == "install")
+    print("Done:", sys.argv[1], " ".join(EXTENSIONS))

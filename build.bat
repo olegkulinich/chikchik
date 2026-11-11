@@ -55,8 +55,6 @@ if errorlevel 1 goto error
 
 for /f %%v in ('python -c "from version import VERSION; print(VERSION)"') do set VERSION=%%v
 
-python make_icon.py
-if errorlevel 1 goto error
 python tools\build_info.py
 if errorlevel 1 goto error
 
@@ -68,6 +66,7 @@ python -m PyInstaller ^
     --onedir ^
     --name ChikChik ^
     --add-data "fonts;fonts" ^
+    --add-data "icon.ico;." ^
     --icon icon.ico ^
     app.py
 if errorlevel 1 goto error
@@ -80,6 +79,9 @@ if errorlevel 1 goto error
 xcopy /e /i /y /q "ffmpeg" "%OUT%\ffmpeg" >nul
 if errorlevel 1 goto error
 if exist "%OUT%\ffmpeg\ffplay.exe" del /q "%OUT%\ffmpeg\ffplay.exe"
+rem T30: icon of the "ChikChik! -> GIF" Explorer item, next to the exe
+copy /y "icons\gif.ico" "%OUT%\gif.ico" >nul
+if errorlevel 1 goto error
 
 echo.
 echo Program: %CD%\%OUT%\ChikChik.exe
