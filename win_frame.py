@@ -212,23 +212,6 @@ def window_size(hwnd) -> tuple[int, int, int, int] | None:
     return w, h, w - (shown.right - shown.left), h - (shown.bottom - shown.top)
 
 
-DWMWA_BORDER_COLOR = 34                # Windows 11
-_COLOR_BLACK, _COLOR_DEFAULT = 0x00000000, 0xFFFFFFFF
-
-
-def set_border_black(hwnd, black: bool) -> None:
-    """Fullscreen keeps a 1 px frame (menus must open above the OpenGL window); DWM
-    paints it light grey — black there, the system colour again outside fullscreen."""
-    if not ENABLED or not hwnd:
-        return
-    try:
-        color = wintypes.DWORD(_COLOR_BLACK if black else _COLOR_DEFAULT)
-        _dwm.DwmSetWindowAttribute(wintypes.HWND(int(hwnd)), DWMWA_BORDER_COLOR,
-                                   ctypes.byref(color), ctypes.sizeof(color))
-    except Exception:
-        pass                           # Windows 10: no such attribute
-
-
 # Fullscreen frame: Qt's border-in-fullscreen is a classic WS_BORDER that Windows paints
 # grey itself (DWMWA_BORDER_COLOR doesn't reach it) — paint it black ourselves.
 WM_NCPAINT = 0x0085
