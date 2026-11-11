@@ -683,6 +683,8 @@ class MainWindow(QMainWindow):
             "minimize_ui": self.toggle_minimize_ui,
             "hide_ui": self.toggle_hide_ui,
             "actual_size": self.zoom_actual,
+            "fit_window": self.fit_window_to_video,      # T43
+            "pin": self.toggle_pin,                      # T45
             "quit": self.close,
         }
         for key, (_title, shortcut) in MENU_SHORTCUTS.items():
@@ -842,6 +844,7 @@ class MainWindow(QMainWindow):
         self._menu_header(menu, "View")
         row("fit", self.info is not None)
         row("actual_size", self.info is not None)
+        row("fit_window", self.info is not None and not self._fullscreen)   # T43
         # Toggles name what a click will do (Fullscreen ↔ Exit Fullscreen) — no checkmarks
         self._menu_choice(menu, "Exit Fullscreen" if self._fullscreen else "Fullscreen", False,
                           self.toggle_fullscreen, hint=display_key(self.config.hotkey("fullscreen")),
@@ -849,6 +852,7 @@ class MainWindow(QMainWindow):
         # T27: names say what a click does
         row("minimize_ui", title="Restore UI" if self._ui_mode == "minimal" else "Minimize UI")
         row("hide_ui", title="Show UI" if self._ui_mode == "hidden" else "Hide UI")
+        row("pin", title="Unpin" if self._pinned() else "Pin on Top")      # T45
         if self.info is not None and (self.info.audio or self.info.subtitles):
             # T40a: tracks in submenus (films can carry 20 subtitle tracks); the row shows
             # the current choice. Each row only when the file has such tracks (no sound —
@@ -1897,6 +1901,7 @@ class MainWindow(QMainWindow):
             return
         if event.type() == QEvent.Type.WindowStateChange:
             self.title_strip.sync()
+            self._apply_pin()          # T45: fullscreen in/out must not drop it
         if event.type() == QEvent.Type.WindowStateChange and self._fullscreen \
                 and not self.isFullScreen() and not self.isMinimized():
             self._fullscreen = False            # left by the system (e.g. Win+↓)
@@ -2035,8 +2040,11 @@ class MainWindow(QMainWindow):
     RESIZE_BAND = 6          # px at the edges that resize the frameless window
 
     def nativeEvent(self, event_type, message):  # noqa: N802
+        msg = win_frame.message(event_type, message) if not self._fullscreen else None
+        if msg is not None and msg[0] == win_frame.WM_SIZING and win_frame.shift_down():
+            if self._keep_aspect(int(msg[2]), msg[3]):                # T44
+                return True, 1
         if self._frame_hidden and not self._fullscreen:
-            msg = win_frame.message(event_type, message)
             if msg is not None:
                 kind, hwnd, wparam, lparam = msg
                 if kind == win_frame.WM_NCCALCSIZE and win_frame.calc_size(hwnd, wparam, lparam):
@@ -2061,6 +2069,98 @@ class MainWindow(QMainWindow):
             if strip.rect().contains(local) and not strip.over_button(local):
                 return win_frame.HTCAPTION
         return 0
+
+    # ================================================== window as PiP (group 6)
+    def _video_aspect(self) -> float | None:
+        dw, dh = self.video._display_dims()
+        return dw / dh if dw and dh else None
+
+    def _keep_aspect(self, edge: int, lparam) -> bool:
+        """T44: Shift while dragging an edge/corner keeps the video's proportions
+        (like Photoshop). Works in physical px — WM_SIZING's RECT is the window rect."""
+        aspect = self._video_aspect()
+        if aspect is None:
+            return False
+        rect = win_frame.sizing_rect(lparam)
+        dpr = self.devicePixelRatioF()
+        frame = self.frameGeometry()
+        # what isn't video: panels + the native frame (constant while dragging)
+        extra_w = round(frame.width() * dpr) - round(self.video.width() * dpr)
+        extra_h = round(frame.height() * dpr) - round(self.video.height() * dpr)
+        border_w = frame.width() - self.width()
+        border_h = frame.height() - self.height()
+        min_size = self.minimumSize().expandedTo(self.minimumSizeHint())
+        min_w = round((min_size.width() + border_w) * dpr)
+        min_h = round((min_size.height() + border_h) * dpr)
+        screen = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        max_w, max_h = round(screen.width() * dpr), round(screen.height() * dpr)
+        win_frame.keep_aspect(rect, edge, extra_w, extra_h, aspect, min_w, min_h, max_w, max_h)
+        return True
+
+    def fit_window_to_video(self) -> None:
+        """T43 Ctrl+Shift+R: once, size the window so the picture fits without bars.
+        Width stays; the height follows. Too tall for the screen → the height stops at
+        the screen and the width shrinks instead (down to the window's minimum)."""
+        if self.info is None or self._fullscreen:
+            return
+        self.video.zoom_fit()
+        if self.isMaximized():
+            self.showNormal()
+            QTimer.singleShot(0, self._fit_window_now)     # let the restore settle
+        else:
+            self._fit_window_now()
+
+    def _fit_window_now(self) -> None:
+        aspect = self._video_aspect()
+        if aspect is None:
+            return
+        extra_w = self.width() - self.video.width()
+        extra_h = self.height() - self.video.height()
+        frame = self.frameGeometry()
+        border_w, border_h = frame.width() - self.width(), frame.height() - self.height()
+        screen = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        max_w, max_h = screen.width() - border_w, screen.height() - border_h
+        min_size = self.minimumSize().expandedTo(self.minimumSizeHint())
+        min_w, min_h = min_size.width(), min_size.height()
+        w = min(self.width(), max_w)
+        h = round((w - extra_w) / aspect) + extra_h
+        if h > max_h:                        # too tall: height to the screen, narrower
+            h = max_h
+            w = round((h - extra_h) * aspect) + extra_w
+        elif h < min_h:                      # too flat: the minimum height, wider
+            h = min_h
+            w = min(max_w, round((h - extra_h) * aspect) + extra_w)
+        w = max(min_w, min(w, max_w))
+        h = max(min_h, min(h, max_h))
+        self.resize(w, h)
+        # keep the whole window on the screen
+        frame = self.frameGeometry()
+        x = min(max(frame.x(), screen.x()), screen.right() + 1 - frame.width())
+        y = min(max(frame.y(), screen.y()), screen.bottom() + 1 - frame.height())
+        if (x, y) != (frame.x(), frame.y()):
+            self.move(x, y)
+
+    def _pinned(self) -> bool:
+        return self.config.flag("pin_on_top")
+
+    def toggle_pin(self) -> None:
+        """T45 Ctrl+Shift+A: stay above other windows (also in fullscreen); remembered."""
+        self.config.set_flag("pin_on_top", not self._pinned())
+        self._apply_pin()
+        self.toast.show_message("Pinned on Top" if self._pinned() else "Unpinned",
+                                action=False, ms=1200)
+
+    def _apply_pin(self) -> None:
+        if not self.isVisible():
+            return
+        win_frame.set_topmost(self.winId(), self._pinned())
+        # Qt's fullscreen/normal switches may reset the z-order after this event
+        QTimer.singleShot(50, lambda: win_frame.set_topmost(self.winId(), self._pinned()))
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._pinned():
+            QTimer.singleShot(0, self._apply_pin)
 
     # ========================================================= zoom (T20)
     def zoom_fit(self) -> None:
