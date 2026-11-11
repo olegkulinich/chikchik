@@ -201,23 +201,10 @@ class MenuRow(QWidget):
             right.addWidget(check)
         layout.addLayout(right)
 
-    # Highlight = the menu's active action, not enter/leave: once a submenu opens, Qt
-    # grabs the mouse and the row never hears "leave" — Audio/Subtitles stayed lit.
-    def _action(self):
-        for action in self.menu.actions():
-            if getattr(action, "defaultWidget", lambda: None)() is self:
-                return action
-        return None
-
-    def enterEvent(self, event):
-        self.update()
-
-    def leaveEvent(self, event):
-        self.update()
-
+    # Highlight = the menu's "hot" row, set by a cursor poll (_MenuHover): Qt's hover,
+    # leave and activeAction go stale once submenus open and grab the mouse (#12).
     def paintEvent(self, event):
-        action = self._action()
-        if self.enabled and action is not None and self.menu.activeAction() is action:
+        if self.enabled and getattr(self.menu, "_hot_row", None) is self:
             from PySide6.QtGui import QColor, QPainter
             p = QPainter(self)
             p.fillRect(self.rect(), QColor(theme.BUTTON_HOVER))
@@ -232,6 +219,51 @@ class MenuRow(QWidget):
                 self.root.close()
             if self.callback:
                 QTimer.singleShot(0, self.callback)
+
+
+class _MenuHover:
+    """Exactly one lit row per menu: the enabled row under the cursor; with the cursor
+    elsewhere — the row whose submenu is open; otherwise none. Polled while shown."""
+
+    def __init__(self, menu: QMenu):
+        self.menu = menu
+        self.timer = QTimer(menu)
+        self.timer.setInterval(30)
+        self.timer.timeout.connect(self.tick)
+        menu.aboutToShow.connect(self._start)
+        menu.aboutToHide.connect(self._stop)
+        menu._hot_row = None
+
+    def _start(self):
+        self.timer.start()
+        QTimer.singleShot(0, self.tick)
+
+    def _stop(self):
+        self.timer.stop()
+        self._set(None)
+
+    def tick(self):
+        pos = QCursor.pos()
+        hot = None
+        open_owner = None
+        for row in self.menu.findChildren(MenuRow):
+            if not row.isVisible():
+                continue
+            if row.enabled and row.rect().contains(row.mapFromGlobal(pos)):
+                hot = row
+            sub = getattr(row, "sub_menu", None)
+            if sub is not None and sub.isVisible():
+                open_owner = row
+        self._set(hot or open_owner)
+
+    def _set(self, row):
+        old = getattr(self.menu, "_hot_row", None)
+        if old is row:
+            return
+        self.menu._hot_row = row
+        for widget in (old, row):
+            if widget is not None:
+                widget.update()
 
 
 class _Reveal:
@@ -753,8 +785,7 @@ class MainWindow(QMainWindow):
         menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        menu.hovered.connect(lambda _action, m=menu: [row.update()
-                                                      for row in m.findChildren(MenuRow)])
+        menu._hover = _MenuHover(menu)
         return menu
 
     @staticmethod
@@ -787,10 +818,12 @@ class MainWindow(QMainWindow):
 
         def submenu_row(title: str, hint: str, sub: QMenu, enabled: bool = True):
             action = QWidgetAction(menu)
-            action.setDefaultWidget(MenuRow(menu, title, hint, enabled, submenu=True))
+            menu_row = MenuRow(menu, title, hint, enabled, submenu=True)
+            action.setDefaultWidget(menu_row)
             action.setEnabled(enabled)
             if enabled:
                 action.setMenu(sub)
+                menu_row.sub_menu = sub
             menu.addAction(action)
 
         row("hotkeys")
@@ -813,17 +846,20 @@ class MainWindow(QMainWindow):
         # T27: names say what a click does
         row("minimize_ui", title="Restore UI" if self._ui_mode == "minimal" else "Minimize UI")
         row("hide_ui", title="Show UI" if self._ui_mode == "hidden" else "Hide UI")
-        if self.info is not None:
+        if self.info is not None and (self.info.audio or self.info.subtitles):
             # T40a: tracks in submenus (films can carry 20 subtitle tracks); the row shows
-            # the current choice
+            # the current choice. Each row only when the file has such tracks (no sound —
+            # no Audio Track, as with Subtitles).
             idle = self.worker is None
             menu.addSeparator()
-            audio = self._new_menu()
-            tracks: list[AudioTrack | None] = [*self.info.audio, None]
-            for track in tracks:
-                self._menu_choice(audio, track.label() if track else "None", track == self.audio,
-                                  lambda t=track: self.set_audio(t), idle, root=menu)
-            submenu_row("Audio Track", _short_track(self.audio), audio)
+            if self.info.audio:
+                audio = self._new_menu()
+                tracks: list[AudioTrack | None] = [*self.info.audio, None]
+                for track in tracks:
+                    self._menu_choice(audio, track.label() if track else "None",
+                                      track == self.audio, lambda t=track: self.set_audio(t),
+                                      idle, root=menu)
+                submenu_row("Audio Track", _short_track(self.audio), audio)
             if self.info.subtitles:
                 subs_menu = self._new_menu()
                 subs: list[SubtitleTrack | None] = [None, *self.info.subtitles]
