@@ -180,6 +180,7 @@ def format_ranges(ranges: list[tuple[int, int]], limit: int = 3) -> str:
     return ", ".join(parts) + (f" (+{more} more)" if more > 0 else "")
 
 
+RGB_PIX_FMTS = ("rgb", "bgr", "argb", "abgr", "gbr", "pal8", "ya", "gray", "monob", "monow")
 ALPHA_PIX_FMTS = ("yuva", "rgba", "bgra", "argb", "abgr", "gbrap", "ya")
 
 
@@ -215,6 +216,17 @@ class MediaInfo:
         if fmt.startswith(ALPHA_PIX_FMTS):
             return True
         return self.sequence is not None and fmt == "pal8"    # PNG palette with tRNS
+
+    @property
+    def rgb_pixels(self) -> bool:
+        """Frames are decoded as RGB (PNG/JPG sequences, PNG-in-MOV, QuickTime Animation…)."""
+        return self.sequence is not None or self.pix_fmt.startswith(RGB_PIX_FMTS)
+
+    @property
+    def rgb_tagged_yuv(self) -> bool:
+        """YUV frames whose matrix tag says RGB ("gbr") — e.g. ProRes 4444 from After Effects.
+        FFmpeg can't write that tag back (-colorspace has no "gbr"): treated as BT.709."""
+        return self.color_space == "gbr" and not self.rgb_pixels
 
     @property
     def hdr(self) -> bool:
@@ -582,15 +594,52 @@ def format_fps(value: float) -> str:
     return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
+def color_tags(info: MediaInfo, rgb_converted: bool) -> list[str]:
+    """Color tags for a YUV output. FFprobe calls the RGB matrix "gbr", which FFmpeg's
+    -colorspace doesn't accept (and an H.264/ProRes stream is YUV anyway): frames that went
+    through RGB are converted with BT.709 into TV range and tagged so."""
+    space = info.color_space
+    color_range = info.color_range
+    if rgb_converted:
+        space, color_range = "bt709", "tv"
+    elif space == "gbr":
+        space = "bt709"
+    tags: list[str] = []
+    for flag, value in (("-colorspace", space), ("-color_primaries", info.color_primaries),
+                        ("-color_trc", info.color_transfer), ("-color_range", color_range)):
+        if value:
+            tags += [flag, value]
+    return tags
+
+
+SCALE_MATRICES = {"bt709": "bt709", "smpte170m": "bt601", "bt470bg": "bt601", "fcc": "fcc",
+                  "smpte240m": "smpte240m", "bt2020nc": "bt2020", "bt2020c": "bt2020"}
+
+
+def to_rgb(info: MediaInfo, pix_fmt: str) -> list[str]:
+    """Conversion into an RGB format with the source's matrix and range spelled out: older
+    FFmpeg converts YUV → RGB as BT.601 whatever the tags say. Untagged — as mpv shows it
+    (HD → BT.709, SD → BT.601); tagged "gbr" on YUV frames — BT.709."""
+    if info.rgb_pixels:
+        return [f"format={pix_fmt}"]
+    matrix = SCALE_MATRICES.get(info.color_space)
+    if matrix is None:
+        matrix = "bt709" if info.rgb_tagged_yuv or info.width >= 1280 or info.height > 576 else "bt601"
+    color_range = info.color_range if info.color_range in ("tv", "pc") else "tv"
+    return [f"scale=in_color_matrix={matrix}:in_range={color_range}", f"format={pix_fmt}"]
+
+
 def video_filters(info: MediaInfo, crop: CropRect | None, scale: float = 1.0,
                   fps: float | None = None, gif: bool = False,
                   keep_alpha: bool = False) -> tuple[list[str], list[str], str]:
     """Return (filters, color tag args, warning). `keep_alpha` — PNG and Copy Frame keep
     transparency; .mp4/.gif get it over black."""
     filters: list[str] = []
+    rgb_converted = info.rgb_pixels
     if info.alpha and not keep_alpha:
+        rgb_converted = True
         # T36: transparent frames over black — premultiplied color is black where alpha is 0
-        filters += ["premultiply=inplace=1", "format=rgb24"]
+        filters += ["premultiply=inplace=1", *to_rgb(info, "rgb24")]
     if fps:
         filters.append(f"fps={format_fps(fps)}")   # first: fewer frames for everything after
     if crop:
@@ -624,17 +673,13 @@ def video_filters(info: MediaInfo, crop: CropRect | None, scale: float = 1.0,
                 "colors will look washed out"
             )
     else:
-        if info.color_space:
-            tags += ["-colorspace", info.color_space]
-        if info.color_primaries:
-            tags += ["-color_primaries", info.color_primaries]
-        if info.color_transfer:
-            tags += ["-color_trc", info.color_transfer]
-        if info.color_range:
-            tags += ["-color_range", info.color_range]
+        tags = color_tags(info, rgb_converted)
 
     if gif:
         return filters, [], warning
+    if rgb_converted and not info.hdr:
+        # explicit matrix: swscale's default for RGB → YUV is BT.601, players assume BT.709
+        filters.append("scale=out_color_matrix=bt709:out_range=tv")
     filters.append("format=yuv420p")
     # Also protects H.264/yuv420p from odd source dimensions.
     filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
@@ -663,11 +708,7 @@ def prores_args(info: MediaInfo, crop: CropRect | None, scale: float,
     filters.append(f"format={pix_fmt}")
     if not four44:
         filters.append("scale=trunc(iw/2)*2:ih")
-    tags: list[str] = []
-    for flag, value in (("-colorspace", info.color_space), ("-color_primaries", info.color_primaries),
-                        ("-color_trc", info.color_transfer), ("-color_range", info.color_range)):
-        if value:
-            tags += [flag, value]
+    tags = color_tags(info, info.rgb_pixels)
     # No "-vendor apl0": the file honestly says it was written by FFmpeg, not Apple.
     args = ["-vf", ",".join(filters), "-c:v", "prores_ks", "-profile:v", str(profile), *tags]
     if info.alpha and four44:
@@ -777,6 +818,8 @@ def build_gif_commands(job: ExportJob) -> tuple[list[list[str]], str]:
     if job.palette is None:
         raise RuntimeError("No palette path for the GIF export")
     filters, _tags, warning = video_filters(job.info, job.crop, job.scale, job.fps, gif=True)
+    if not job.info.alpha and not job.info.hdr:
+        filters += to_rgb(job.info, "rgb24")     # palettegen works in RGB: right matrix first
     chain = ",".join(filters) if filters else "null"
     base = [
         executable("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
@@ -809,7 +852,7 @@ def build_png_command(job: ExportJob) -> tuple[list[str], str]:
         raise RuntimeError("Out must be later than In")
     filters, _tags, warning = video_filters(job.info, job.crop, job.scale, job.fps, gif=True,
                                             keep_alpha=True)
-    filters.append("format=rgba" if job.info.alpha else "format=rgb24")
+    filters += to_rgb(job.info, "rgba" if job.info.alpha else "rgb24")
     command = [
         executable("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
         "-progress", "pipe:1", "-nostats",
@@ -827,7 +870,7 @@ def build_frame_command(source: Path, info: MediaInfo, time: float,
                         crop: CropRect | None, scale: float) -> list[str]:
     """T19a: one exact frame as PNG on stdout (Copy Frame)."""
     filters, _tags, _warning = video_filters(info, crop, scale, None, gif=True, keep_alpha=True)
-    filters.append("format=rgba" if info.alpha else "format=rgb24")
+    filters += to_rgb(info, "rgba" if info.alpha else "rgb24")
     if info.sequence is not None:          # T36: the frame's own file
         total = len(info.sequence.files)
         index = max(0, min(total - 1, int(math.floor(time * info.fps + 0.75))))
