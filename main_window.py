@@ -1091,12 +1091,16 @@ class MainWindow(QMainWindow):
         if not exact:
             self._kf_drag = True
             self._exact_timer.start()     # T18: at rest the playhead moves to the picture
+        else:
+            # an exact seek shows the playhead's frame: release seeks exactly (no T18 follow)
+            self._kf_drag = False
+            self._exact_timer.stop()
 
     def _exact_scrub(self) -> bool:
         """T9 / 1b: keyframe seeks are fastest across the whole file, but zoomed in the
         whole drag fits between two keyframes (every 2–10 s in films) and the picture
         wouldn't change — there, seek exactly (the queue keeps the UI smooth)."""
-        if self.info.intra_only:
+        if self.info.intra_only or self.timeline.fine:     # Alt+drag: always exact
             return True
         span = self.timeline.view_end - self.timeline.view_start
         frames_per_px = span / self._step(False) / max(1, self.timeline.width())

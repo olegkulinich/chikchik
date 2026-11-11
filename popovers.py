@@ -203,11 +203,16 @@ class HotkeysPopover(Popover):
             self.caps[action.id] = cap
         # Reference only: frames mode is a Ctrl+click, not a reassignable key.
         row = len(HOTKEY_ACTIONS)
-        grid.addWidget(QLabel("Frames / Timecode"), row, 0)
-        self._ref = dim_label("Ctrl+Click ⌛")
-        self._ref.setAlignment(Qt.AlignmentFlag.AlignCenter)    # centered like the key caps
-        grid.addWidget(self._ref, row, 1, Qt.AlignmentFlag.AlignRight)
-        self._rows = row + 1
+        self._refs = []
+        for title, keys in (("Frames / Timecode", "Ctrl+Click ⌛"),
+                            ("Frame-Exact Scrub", "Alt+Drag")):
+            grid.addWidget(QLabel(title), row, 0)
+            ref = dim_label(keys)
+            ref.setAlignment(Qt.AlignmentFlag.AlignCenter)       # centered like the key caps
+            grid.addWidget(ref, row, 1, Qt.AlignmentFlag.AlignRight)
+            self._refs.append(ref)
+            row += 1
+        self._rows = row
 
         self.scroll = QScrollArea()
         self.scroll.setObjectName("HotkeysScroll")
@@ -244,10 +249,11 @@ class HotkeysPopover(Popover):
     def _fit(self) -> None:
         """Caps share the widest width; the list shows at most MAX_ROWS rows."""
         widest = max(cap.natural_width() for cap in self.caps.values())
-        widest = max(widest, self._ref.sizeHint().width())
+        widest = max([widest] + [ref.sizeHint().width() for ref in self._refs])
         for cap in self.caps.values():
             cap.setFixedWidth(widest)
-        self._ref.setFixedWidth(widest)
+        for ref in self._refs:
+            ref.setFixedWidth(widest)
         row_h = max(cap.sizeHint().height() for cap in self.caps.values())
         rows = min(self._rows, self.MAX_ROWS)
         visible = rows * row_h + (rows - 1) * self.ROW_SPACING
