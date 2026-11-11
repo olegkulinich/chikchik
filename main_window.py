@@ -1549,7 +1549,7 @@ class MainWindow(QMainWindow):
 
     def _reencode_changed(self, reason: str) -> None:
         """Original can't do crop/scale/fps → switch to .mp4 once and say why."""
-        if self.fmt == "copy" and self._needs_reencode():
+        if self.fmt == "copy" and self._needs_reencode() and not self._prores_original():
             self.set_format("mp4")
             self.toast.show_message(f"Original → .mp4: {reason} needs re-encoding",
                                     action=False, ms=4000)
@@ -1659,7 +1659,7 @@ class MainWindow(QMainWindow):
     def set_format(self, fmt: str, explain: bool = False) -> None:
         if fmt not in FORMATS:
             return
-        if fmt == "copy" and self._needs_reencode():
+        if fmt == "copy" and self._needs_reencode() and not self._prores_original():
             if explain:      # T37: the hotkey must not fail silently
                 self.toast.show_message(
                     f"Original unavailable: {self._reencode_reason()} needs re-encoding",
@@ -1674,7 +1674,7 @@ class MainWindow(QMainWindow):
         idle = self.worker is None
         reencode = self._needs_reencode()
         for fmt in FORMATS:
-            blocked = fmt == "copy" and reencode
+            blocked = fmt == "copy" and reencode and not self._prores_original()
             self._menu_choice(menu, self._format_label(fmt), fmt == self.fmt,
                               lambda f=fmt: self.set_format(f), idle and not blocked,
                               check_column=True)
@@ -1733,9 +1733,16 @@ class MainWindow(QMainWindow):
         else:
             self.export(ask=self._asks_where())   # T42: the button follows Save To
 
+    def _prores_original(self) -> bool:
+        """T46: Original stays possible with crop/scale/fps — re-encoded into ProRes."""
+        return self.info is not None and self.info.prores
+
     def _kind(self) -> str:
-        """mp4 | gif | png | copy — Original falls back to mp4 if something needs re-encoding."""
-        return "mp4" if self.fmt == "copy" and self._needs_reencode() else self.fmt
+        """mp4 | gif | png | copy | prores — Original falls back to mp4 if something needs
+        re-encoding; a ProRes source re-encodes into its own profile instead (T46)."""
+        if self.fmt == "copy" and self._needs_reencode():
+            return "prores" if self._prores_original() else "mp4"
+        return self.fmt
 
     def _suffix(self) -> str:
         kind = self._kind()
@@ -2053,7 +2060,7 @@ class MainWindow(QMainWindow):
         if kind == "gif" and out_suffix != ".gif":
             self._error("Export", "GIF export writes a .gif file.")
             return
-        if kind == "copy" and out_suffix != self.source.suffix.lower():
+        if kind in ("copy", "prores") and out_suffix != self.source.suffix.lower():
             self._error("Export", f"Original keeps the source container ({self.source.suffix}).")
             return
         if same_path(output, self.source):

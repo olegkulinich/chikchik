@@ -199,6 +199,13 @@ class MediaInfo:
     audio: tuple[AudioTrack, ...] = field(default_factory=tuple)
     subtitles: tuple[SubtitleTrack, ...] = field(default_factory=tuple)
     sequence: ImageSequence | None = None      # T36: PNG/JPG frames instead of a file
+    profile: str = ""                          # codec profile ("XQ", "4444", "HQ"… for ProRes)
+
+    @property
+    def prores(self) -> bool:
+        """T46: ProRes is intra-only — Original with crop/scale/fps re-encodes into the
+        same ProRes profile (alpha kept) instead of falling back to .mp4."""
+        return self.codec == "prores" and self.sequence is None
 
     @property
     def alpha(self) -> bool:
@@ -248,7 +255,7 @@ class ExportJob:
     subtitle: SubtitleTrack | None = None
     scale: float = 1.0
     fps: float | None = None          # output frame rate; None = keep the source rate
-    kind: str = "mp4"                 # mp4 | copy | gif | png
+    kind: str = "mp4"                 # mp4 | copy | gif | png | prores (T46)
     start_number: int = 0             # PNG only: number of the first frame (source frame of In)
     palette: Path | None = None       # GIF only: temporary palette next to the output
 
@@ -424,6 +431,7 @@ def probe_media(path: Path) -> MediaInfo:
         height=height,
         fps=_fps(video.get("avg_frame_rate")) or _fps(video.get("r_frame_rate")),
         codec=str(video.get("codec_name") or "unknown"),
+        profile=str(video.get("profile") or ""),
         video_index=int(video.get("index", 0)),
         pix_fmt=str(video.get("pix_fmt") or ""),
         color_transfer=_known(video.get("color_transfer")),
@@ -633,6 +641,40 @@ def video_filters(info: MediaInfo, crop: CropRect | None, scale: float = 1.0,
     return filters, tags, warning
 
 
+PRORES_PROFILES = {"proxy": 0, "lt": 1, "standard": 2, "hq": 3, "4444": 4, "xq": 5}
+
+
+def prores_args(info: MediaInfo, crop: CropRect | None, scale: float,
+                fps: float | None) -> list[str]:
+    """T46: re-encode into the source's ProRes profile. 4444 / XQ keep 4:4:4 and alpha
+    (prores_ks takes 10-bit); 422 profiles need an even width."""
+    profile = PRORES_PROFILES.get(info.profile.lower(), 3)
+    four44 = profile >= 4
+    filters: list[str] = []
+    if fps:
+        filters.append(f"fps={format_fps(fps)}")
+    if crop:
+        filters.append(f"crop={crop.width}:{crop.height}:{crop.x}:{crop.y}")
+    if scale != 1.0:
+        base_w, base_h = (crop.width, crop.height) if crop else (info.width, info.height)
+        width, height = scaled_size(base_w, base_h, scale)
+        filters.append(f"scale={width}:{height}:flags=lanczos")
+    pix_fmt = ("yuva444p10le" if info.alpha else "yuv444p10le") if four44 else "yuv422p10le"
+    filters.append(f"format={pix_fmt}")
+    if not four44:
+        filters.append("scale=trunc(iw/2)*2:ih")
+    tags: list[str] = []
+    for flag, value in (("-colorspace", info.color_space), ("-color_primaries", info.color_primaries),
+                        ("-color_trc", info.color_transfer), ("-color_range", info.color_range)):
+        if value:
+            tags += [flag, value]
+    # No "-vendor apl0": the file honestly says it was written by FFmpeg, not Apple.
+    args = ["-vf", ",".join(filters), "-c:v", "prores_ks", "-profile:v", str(profile), *tags]
+    if info.alpha and four44:
+        args += ["-alpha_bits", "16"]
+    return args
+
+
 def build_ffmpeg_command(job: ExportJob) -> tuple[list[str], str]:
     """Return (command, warning)."""
     if job.duration <= 0:
@@ -666,7 +708,10 @@ def build_ffmpeg_command(job: ExportJob) -> tuple[list[str], str]:
     warning = ""
     suffix = job.final_output.suffix.lower()
 
-    if job.fast:
+    if job.kind == "prores":
+        command += [*prores_args(job.info, job.crop, job.scale, job.fps),
+                    "-c:a", "copy", "-map_metadata", "0", "-map_chapters", "-1"]
+    elif job.fast:
         if suffix == ".mkv" and job.subtitle is not None:
             # Only the subtitle track picked in the menu + attached fonts (anime releases).
             command += [
