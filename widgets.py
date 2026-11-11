@@ -720,6 +720,10 @@ class Timeline(QWidget):
         self._moved = False
         self.fine, self._fine_anchor, self._park_x = False, None, None
         self._drag = self._edge_at(x) or "seek"
+        if self._drag == "seek" and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            # Alt+press: frame scrub from where the playhead is — no jump to the cursor
+            self.fine, self._fine_anchor, self._moved = True, (x, self.position), True
+            return
         if self._drag == "seek":
             # Exact seek right away — no keyframe preview that flickers back.
             self.position = self._t(x)
