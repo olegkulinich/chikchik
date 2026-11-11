@@ -553,6 +553,7 @@ class Timeline(QWidget):
         self._fine_anchor: tuple[float, float] | None = None   # (x, t) when Alt went down
         self._park_x: float | None = None                       # x when Alt was let go
         self.frames_mode = False        # T39: ruler in frame numbers
+        self.frame_offset = 0           # T47: number of frame 0 (sequence file names)
 
     # --- state
     def set_duration(self, duration: float, frame_duration: float | None = None) -> None:
@@ -579,6 +580,10 @@ class Timeline(QWidget):
 
     def set_trim_enabled(self, enabled: bool) -> None:
         self.trim_enabled = enabled
+        self.update()
+
+    def set_frame_offset(self, offset: int) -> None:
+        self.frame_offset = offset
         self.update()
 
     def set_frames_mode(self, enabled: bool) -> None:
@@ -640,7 +645,7 @@ class Timeline(QWidget):
 
     def _label(self, t: float, step: float) -> str:
         if self.frames_mode:
-            return str(round(t / self.frame_duration))
+            return str(round(t / self.frame_duration) + self.frame_offset)
         hours = self.duration >= 3600
         if step < 1:
             minutes, seconds = divmod(t, 60)
@@ -666,6 +671,10 @@ class Timeline(QWidget):
             # ruler: tick at the bottom + label, no minor ticks
             step = self._label_step()
             first = math.floor(self.view_start / step) * step
+            if self.frames_mode:                # ticks on round numbers of the sequence (T47)
+                step_frames = max(1, round(step / self.frame_duration))
+                shift = (self.frame_offset % step_frames) * self.frame_duration
+                first = math.floor((self.view_start + shift) / step) * step - shift
             metrics = p.fontMetrics()
             baseline = (h + self.MINIMAP_H + metrics.ascent() - metrics.descent()) / 2
             t = first

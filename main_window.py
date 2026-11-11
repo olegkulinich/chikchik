@@ -975,6 +975,7 @@ class MainWindow(QMainWindow):
             if self.fmt == "copy" and sequence is not None:
                 self.fmt = "mp4"                     # T36: frames have no "original" to copy
         self.timeline.set_duration(info.duration, info.frame_duration)   # also resets zoom
+        self.timeline.set_frame_offset(self._frame_offset())             # T47
         self.timeline.set_frames_mode(self.config.flag("frames_mode"))
         self._last_dims = None
 
@@ -1367,10 +1368,16 @@ class MainWindow(QMainWindow):
     def _frame_of(self, t: float) -> int:
         return round(t / self._step(False))
 
+    def _frame_offset(self) -> int:
+        """T47: a sequence counts frames by the numbers in its file names (shot_0063 → 63);
+        a video counts from 0. The timecode always starts at 0."""
+        sequence = getattr(self.info, "sequence", None) if self.info is not None else None
+        return sequence.first if sequence is not None else 0
+
     def _fmt(self, t: float) -> str:
-        """Timecode, or the frame number (0-based, source fps) in frames mode."""
+        """Timecode, or the frame number (source fps; a sequence's own numbers) in frames mode."""
         if self._frames_mode() and self.info is not None:
-            return str(self._frame_of(t))
+            return str(self._frame_of(t) + self._frame_offset())
         return format_time(t)
 
     def _fmt_length(self, length: float) -> str:
@@ -1388,6 +1395,8 @@ class MainWindow(QMainWindow):
                 return None
             if frames < 0:
                 return None
+            if not length:                      # a position, not a length: own numbers (T47)
+                frames = max(0.0, frames - self._frame_offset())   # below the first → first
             return frames * self._step(False)
         return parse_time(text if not text.strip().lower().endswith("f") else cleaned)
 
