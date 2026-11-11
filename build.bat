@@ -57,6 +57,8 @@ for /f %%v in ('python -c "from version import VERSION; print(VERSION)"') do set
 
 python make_icon.py
 if errorlevel 1 goto error
+python tools\build_info.py
+if errorlevel 1 goto error
 
 rem ---------------------------------------------------------------- program
 python -m PyInstaller ^

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushBu
 
 import theme
 from config import HOTKEY_ACTIONS, Config, display_key
-from version import APP_NAME, VERSION
+from version import APP_NAME, BUILD, VERSION
 from widgets import CheckBox, Popover, Segmented, button, dim_label
 
 
@@ -59,7 +59,7 @@ class SettingsPopover(Popover):
         ], "save_to", last=True)
 
         self.body.addSpacing(14)
-        version = dim_label(f"{APP_NAME} {VERSION}")
+        version = dim_label(" · ".join(filter(None, (f"{APP_NAME} {VERSION}", BUILD))))
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.body.addWidget(version)
 
