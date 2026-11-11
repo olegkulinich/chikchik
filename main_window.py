@@ -108,7 +108,10 @@ def format_scale(value: float) -> str:
 
 
 FORMATS = ("mp4", "gif", "png", "copy")   # T25: same order everywhere; copy = Original
-EXACT_SCRUB_SPAN = 60.0   # s visible on the timeline or less → exact seeks while dragging
+# 1b: exact seeks while dragging once a pixel of the timeline covers this many frames or
+# fewer (was "≤ 60 s visible": too late in a wide window, too early in a narrow one).
+# Intra-only sources (sequences, ProRes…) always seek exactly.
+EXACT_SCRUB_FRAMES_PER_PX = 4.0
 
 
 def parse_time(text: str) -> float | None:
@@ -1054,6 +1057,8 @@ class MainWindow(QMainWindow):
         t = self._snap(t)
         self.timeline.show_position(t)
         self.time_field.setText(self._fmt(t))
+        if final and perf_log.ENABLED:
+            perf_log.log(f"final  frame {self._frame_no(t)}")
         if final:
             self._exact_timer.stop()
             if self._scrub_active:
@@ -1071,21 +1076,34 @@ class MainWindow(QMainWindow):
             self._hold_target, self._hold_until = t, time.monotonic() + 0.5
             self._nudge_target, self._nudge_stamp = t, time.monotonic()
             return
+        exact = self._exact_scrub()
         if not self._scrub_active:
             self._scrub_active = True
-            self.video.set_scrub_mode(True)
-        # T9: keyframe seeks are fastest across the whole file, but zoomed in the
-        # whole drag fits between two keyframes (anime/films: every 2–10 s) and the
-        # picture wouldn't change — there, seek exactly (the queue keeps the UI smooth).
-        exact = self.timeline.view_end - self.timeline.view_start <= EXACT_SCRUB_SPAN
+            if not self.info.intra_only:     # lighter decoding only helps H.264/HEVC
+                self.video.set_scrub_mode(True)
         moved = self._scrub_t is None or abs(t - self._scrub_t) >= self._step(False) / 2
         self._scrub_t = t
         if not moved:          # jitter under a frame: keep the rest timer running
             return
+        if perf_log.ENABLED:
+            perf_log.log(f"drag   frame {self._frame_no(t)} {'exact' if exact else 'kf'}")
         self.video.seek(t, exact)
         if not exact:
             self._kf_drag = True
             self._exact_timer.start()     # T18: at rest the playhead moves to the picture
+
+    def _exact_scrub(self) -> bool:
+        """T9 / 1b: keyframe seeks are fastest across the whole file, but zoomed in the
+        whole drag fits between two keyframes (every 2–10 s in films) and the picture
+        wouldn't change — there, seek exactly (the queue keeps the UI smooth)."""
+        if self.info.intra_only:
+            return True
+        span = self.timeline.view_end - self.timeline.view_start
+        frames_per_px = span / self._step(False) / max(1, self.timeline.width())
+        return frames_per_px <= EXACT_SCRUB_FRAMES_PER_PX
+
+    def _frame_no(self, t: float) -> int:
+        return int(round(t / self._step(False)))
 
     def _follow_picture(self) -> None:
         """Playhead and ⌛ jump to the frame mpv shows (keyframe scrub)."""

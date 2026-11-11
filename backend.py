@@ -180,6 +180,8 @@ def format_ranges(ranges: list[tuple[int, int]], limit: int = 3) -> str:
     return ", ".join(parts) + (f" (+{more} more)" if more > 0 else "")
 
 
+INTRA_CODECS = {"prores", "png", "qtrle", "mjpeg", "dnxhd", "cfhd", "rawvideo", "v210",
+                "tiff", "dpx", "exr", "utvideo", "hap", "jpeg2000", "ffv1"}
 RGB_PIX_FMTS = ("rgb", "bgr", "argb", "abgr", "gbr", "pal8", "ya", "gray", "monob", "monow")
 ALPHA_PIX_FMTS = ("yuva", "rgba", "bgra", "argb", "abgr", "gbrap", "ya")
 
@@ -201,6 +203,12 @@ class MediaInfo:
     subtitles: tuple[SubtitleTrack, ...] = field(default_factory=tuple)
     sequence: ImageSequence | None = None      # T36: PNG/JPG frames instead of a file
     profile: str = ""                          # codec profile ("XQ", "4444", "HQ"… for ProRes)
+
+    @property
+    def intra_only(self) -> bool:
+        """Every frame is a keyframe (sequences, ProRes, PNG/QuickTime Animation, DNxHD…):
+        an exact seek costs the same as a keyframe one."""
+        return self.sequence is not None or self.codec in INTRA_CODECS
 
     @property
     def prores(self) -> bool:

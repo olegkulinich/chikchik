@@ -317,6 +317,8 @@ class VideoView(QOpenGLWidget):
     # ---------------------------------------------- mpv thread → cache
     def _on_property(self, name: str, value) -> None:      # mpv event thread
         self._state[name] = value
+        if name == "time-pos" and perf_log.ENABLED and value is not None and self.frame_duration_s:
+            perf_log.log(f"shown  frame {round(value / self.frame_duration_s)}")
         if name == "pause" and value:
             self._stepping_until = 0.0                     # the step is over
         if name in ("dwidth", "dheight"):
