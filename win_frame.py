@@ -190,3 +190,40 @@ def set_topmost(hwnd, on: bool) -> None:
     after = wintypes.HWND(-1 if on else -2)       # HWND_TOPMOST / HWND_NOTOPMOST
     _user32.SetWindowPos(wintypes.HWND(int(hwnd)), after, 0, 0, 0, 0,
                          swp_nosize | swp_nomove | swp_noactivate)
+
+
+def window_size(hwnd) -> tuple[int, int, int, int] | None:
+    """(width, height, invisible_w, invisible_h) of the native window in physical px.
+    The size is the same box WM_SIZING hands us — with Windows 11's invisible resize
+    borders (Qt's frameGeometry doesn't match it); invisible_* is how much of it
+    isn't drawn (DWM's extended frame bounds), so the visible window can fill the screen."""
+    if not ENABLED or not hwnd:
+        return None
+    handle = wintypes.HWND(int(hwnd))
+    rect = wintypes.RECT()
+    if not _user32.GetWindowRect(handle, ctypes.byref(rect)):
+        return None
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    shown = wintypes.RECT()
+    dwmwa_extended_frame_bounds = 9
+    if _dwm.DwmGetWindowAttribute(handle, dwmwa_extended_frame_bounds,
+                                  ctypes.byref(shown), ctypes.sizeof(shown)) != 0:
+        return w, h, 0, 0
+    return w, h, w - (shown.right - shown.left), h - (shown.bottom - shown.top)
+
+
+DWMWA_BORDER_COLOR = 34                # Windows 11
+_COLOR_BLACK, _COLOR_DEFAULT = 0x00000000, 0xFFFFFFFF
+
+
+def set_border_black(hwnd, black: bool) -> None:
+    """Fullscreen keeps a 1 px frame (menus must open above the OpenGL window); DWM
+    paints it light grey — black there, the system colour again outside fullscreen."""
+    if not ENABLED or not hwnd:
+        return
+    try:
+        color = wintypes.DWORD(_COLOR_BLACK if black else _COLOR_DEFAULT)
+        _dwm.DwmSetWindowAttribute(wintypes.HWND(int(hwnd)), DWMWA_BORDER_COLOR,
+                                   ctypes.byref(color), ctypes.sizeof(color))
+    except Exception:
+        pass                           # Windows 10: no such attribute

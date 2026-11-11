@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -429,6 +431,19 @@ class _Central(QWidget):
             self.video.release_at(self._mapped(event))
             return
         super().mouseReleaseEvent(event)
+
+
+_SIZING_LOG = os.environ.get("QTC_SIZING_LOG") == "1"     # T44 diagnostics
+
+
+def _sizing_log(line: str) -> None:
+    """QTC_SIZING_LOG=1 → %TEMP%\\ChikChik-sizing.log, one line per WM_SIZING."""
+    try:
+        path = Path(tempfile.gettempdir()) / "ChikChik-sizing.log"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {line}\n")
+    except OSError:
+        pass
 
 
 class MainWindow(QMainWindow):
@@ -1902,6 +1917,7 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.WindowStateChange:
             self.title_strip.sync()
             self._apply_pin()          # T45: fullscreen in/out must not drop it
+            win_frame.set_border_black(self.winId(), self._fullscreen and self.isFullScreen())
         if event.type() == QEvent.Type.WindowStateChange and self._fullscreen \
                 and not self.isFullScreen() and not self.isMinimized():
             self._fullscreen = False            # left by the system (e.g. Win+↓)
@@ -2077,24 +2093,33 @@ class MainWindow(QMainWindow):
 
     def _keep_aspect(self, edge: int, lparam) -> bool:
         """T44: Shift while dragging an edge/corner keeps the video's proportions
-        (like Photoshop). Works in physical px — WM_SIZING's RECT is the window rect."""
+        (like Photoshop). Works in physical px — WM_SIZING's RECT is the native window
+        rect, so the window's own size is taken from Windows too (not Qt's frame)."""
         aspect = self._video_aspect()
-        if aspect is None:
+        native = win_frame.window_size(self.winId())
+        if aspect is None or native is None:
             return False
         rect = win_frame.sizing_rect(lparam)
+        before = (rect.left, rect.top, rect.right, rect.bottom)
         dpr = self.devicePixelRatioF()
-        frame = self.frameGeometry()
-        # what isn't video: panels + the native frame (constant while dragging)
-        extra_w = round(frame.width() * dpr) - round(self.video.width() * dpr)
-        extra_h = round(frame.height() * dpr) - round(self.video.height() * dpr)
-        border_w = frame.width() - self.width()
-        border_h = frame.height() - self.height()
+        win_w, win_h, invisible_w, invisible_h = native
+        # what isn't video: panels + the native frame with its invisible borders
+        extra_w = win_w - round(self.video.width() * dpr)
+        extra_h = win_h - round(self.video.height() * dpr)
+        border_w = win_w - round(self.width() * dpr)
+        border_h = win_h - round(self.height() * dpr)
         min_size = self.minimumSize().expandedTo(self.minimumSizeHint())
-        min_w = round((min_size.width() + border_w) * dpr)
-        min_h = round((min_size.height() + border_h) * dpr)
+        min_w = round(min_size.width() * dpr) + border_w
+        min_h = round(min_size.height() * dpr) + border_h
         screen = (self.screen() or QApplication.primaryScreen()).availableGeometry()
-        max_w, max_h = round(screen.width() * dpr), round(screen.height() * dpr)
+        max_w = round(screen.width() * dpr) + invisible_w      # the visible window = screen
+        max_h = round(screen.height() * dpr) + invisible_h
         win_frame.keep_aspect(rect, edge, extra_w, extra_h, aspect, min_w, min_h, max_w, max_h)
+        if _SIZING_LOG:
+            _sizing_log(f"edge {edge} aspect {aspect:.4f} dpr {dpr} window {win_w}x{win_h} "
+                        f"video {self.video.width()}x{self.video.height()} extra {extra_w}x{extra_h} "
+                        f"min {min_w}x{min_h} max {max_w}x{max_h} rect {before} -> "
+                        f"{(rect.left, rect.top, rect.right, rect.bottom)}")
         return True
 
     def fit_window_to_video(self) -> None:
@@ -2111,6 +2136,10 @@ class MainWindow(QMainWindow):
             self._fit_window_now()
 
     def _fit_window_now(self) -> None:
+        """Horizontal video: the width stays, the height follows. Vertical or square:
+        the height stays, the width follows (a wide, low window → the bars at the sides
+        go). Whatever doesn't fit the screen shrinks both; the window's minimum wins
+        (a tall video with the full panels keeps its side bars)."""
         aspect = self._video_aspect()
         if aspect is None:
             return
@@ -2122,14 +2151,27 @@ class MainWindow(QMainWindow):
         max_w, max_h = screen.width() - border_w, screen.height() - border_h
         min_size = self.minimumSize().expandedTo(self.minimumSizeHint())
         min_w, min_h = min_size.width(), min_size.height()
-        w = min(self.width(), max_w)
-        h = round((w - extra_w) / aspect) + extra_h
-        if h > max_h:                        # too tall: height to the screen, narrower
-            h = max_h
-            w = round((h - extra_h) * aspect) + extra_w
-        elif h < min_h:                      # too flat: the minimum height, wider
-            h = min_h
-            w = min(max_w, round((h - extra_h) * aspect) + extra_w)
+
+        def by_width(w: int) -> tuple[int, int]:
+            return w, round((w - extra_w) / aspect) + extra_h
+
+        def by_height(h: int) -> tuple[int, int]:
+            return round((h - extra_h) * aspect) + extra_w, h
+
+        if aspect > 1:
+            w, h = by_width(min(self.width(), max_w))
+        else:
+            w, h = by_height(min(self.height(), max_h))
+        if h > max_h:                        # too tall for the screen
+            w, h = by_height(max_h)
+        if w > max_w:                        # too wide for the screen
+            w, h = by_width(max_w)
+        if h < min_h:                        # too low: the minimum height, wider
+            w, h = by_height(min_h)
+        if w < min_w:                        # too narrow: the minimum width, taller
+            w, h = by_width(min_w)
+            if h > max_h:                    # …unless that leaves the screen: keep bars
+                h = max(min_h, min(self.height(), max_h))
         w = max(min_w, min(w, max_w))
         h = max(min_h, min(h, max_h))
         self.resize(w, h)
