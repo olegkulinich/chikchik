@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QProcess, QPropertyAnimation,
-                            QRect, Qt, QTimer, QUrl)
+from PySide6.QtCore import (QEasingCurve, QEvent, QMimeData, QPoint, QPointF, QProcess,
+                            QPropertyAnimation, QRect, Qt, QTimer, QUrl)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -42,6 +42,13 @@ from version import APP_NAME
 import theme
 import win_frame
 from backend import (
+    find_sequence,
+    format_ranges,
+    is_image,
+    mpv_list,
+    probe_sequence,
+    sequence_range,
+    with_fps,
     PRECISE_CONTAINERS,
     SCALES,
     AudioTrack,
@@ -82,7 +89,8 @@ from widgets import (
     dim_label,
 )
 
-VIDEO_FILTER = "Video (*.mp4 *.mkv *.mov *.m4v *.avi *.webm *.mts *.ts);;All files (*)"
+VIDEO_FILTER = ("Video or frame (*.mp4 *.mkv *.mov *.m4v *.avi *.webm *.mts *.ts *.png *.jpg *.jpeg)"
+                ";;All files (*)")
 
 
 def format_time(value: float) -> str:
@@ -415,6 +423,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.setMinimumHeight(420)  # min width comes from the bottom row (~960 px)
         # T22 fullscreen: panels float over the video and show on hover
+        self._mpv_list: Path | None = None   # T36: mf:// frame list of the open sequence
         self._ui_ready = False
         self._fullscreen = False
         self._window_geometry = None        # saveGeometry() from before fullscreen
@@ -664,6 +673,14 @@ class MainWindow(QMainWindow):
                     self.toggle_hide_ui()
             event.accept()
             return True
+        if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
+                and self._is_export_key(event):
+            # T42: Ctrl+E / Ctrl+Shift+E handled here, once — on Windows the pair was
+            # seen to start both exports. ShortcutOverride accepted → no QAction fires.
+            if kind == QEvent.Type.KeyPress and not event.isAutoRepeat():
+                self.export(ask=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+            event.accept()
+            return True
         if in_window and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
                                   QEvent.Type.MouseButtonRelease) and self._rmb_event(obj, event):
             return True
@@ -867,12 +884,30 @@ class MainWindow(QMainWindow):
             return
         path = path.expanduser().resolve()
         try:
-            info = probe_media(path)
+            if is_image(path):                                   # T36: a frame → sequence
+                info = probe_sequence(find_sequence(path))
+            else:
+                info = probe_media(path)
         except Exception as exc:
             self._error("Could not open video", str(exc))
             return
+        self._open_info(path, info)
+
+    def _open_info(self, path: Path, info: MediaInfo, keep: dict | None = None) -> None:
+        """Load a probed file or sequence. `keep` (T36 fps change) restores trim, crop and
+        the frame instead of the clean state."""
+        sequence = info.sequence
+        if sequence is not None:
+            path = sequence.first_file if keep is None else path
 
         self.source, self.info = path, info
+        if sequence is not None:
+            if self._mpv_list is not None:
+                self._remove(self._mpv_list)
+            self._mpv_list = mpv_list(sequence)
+            url: Path | str = f"mf://@{self._mpv_list}"
+        else:
+            url = path
         self.audio = info.default_audio()
         self.subtitle = None
         self.trim_in, self.trim_out = 0.0, info.duration
@@ -881,17 +916,23 @@ class MainWindow(QMainWindow):
         self.crop = QRect(0, 0, info.width, info.height)
         self._set_checked(self.crop_button, False)
         self.video.set_crop(self.crop)
-        self.video.load(path, (info.width, info.height),
+        autoplay = self.config.flag("autoplay") if keep is None else keep["playing"]
+        self.video.load(url, (info.width, info.height),
                         self.audio.number if self.audio else None, None,
-                        autoplay=self.config.flag("autoplay"),          # T35
-                        frame_duration=info.frame_duration)
-        start_format = self.config.start_format()                          # T25
-        self.fmt = start_format if start_format in FORMATS else "mp4"
+                        autoplay=autoplay,                                 # T35
+                        frame_duration=info.frame_duration,
+                        sequence_fps=info.fps if sequence is not None else None)
+        if keep is None:
+            start_format = self.config.start_format()                      # T25
+            self.fmt = start_format if start_format in FORMATS else "mp4"
+            if self.fmt == "copy" and sequence is not None:
+                self.fmt = "mp4"                     # T36: frames have no "original" to copy
         self.timeline.set_duration(info.duration, info.frame_duration)   # also resets zoom
         self.timeline.set_frames_mode(self.config.flag("frames_mode"))
         self._last_dims = None
 
-        self.setWindowTitle(f"{APP_NAME} — {path.name}")   # T23: name only
+        name = sequence.display_name if sequence is not None else path.name
+        self.setWindowTitle(f"{APP_NAME} — {name}")   # T23: name only
         self._show_times()
         self._show_crop()
         self._show_fps()
@@ -901,6 +942,11 @@ class MainWindow(QMainWindow):
         self._history_reset()                                              # T32
         self.config.push_recent(str(path))                                 # T40
         self.video.setFocus()
+        if keep is not None:
+            self._restore_kept(keep)
+        elif sequence is not None and sequence.missing():
+            self.toast.show_message(f"Missing frames: {format_ranges(sequence.missing())}",
+                                    action=False, ms=6000)
 
     def set_audio(self, track: AudioTrack | None) -> None:
         self.audio = track
@@ -1489,9 +1535,12 @@ class MainWindow(QMainWindow):
 
     def _needs_reencode(self) -> bool:
         return (self._effective_crop() is not None or self.scale != 1.0
-                or self._target_fps() is not None)
+                or self._target_fps() is not None
+                or (self.info is not None and self.info.sequence is not None))
 
     def _reencode_reason(self) -> str:
+        if self.info is not None and self.info.sequence is not None:
+            return "an image sequence"
         if self._effective_crop() is not None:
             return "crop"
         if self.scale != 1.0:
@@ -1520,11 +1569,60 @@ class MainWindow(QMainWindow):
         self.fps_field.set_error(False)
 
     def _set_fps(self, value: float) -> None:
+        if self.info.sequence is not None:            # T36: the field sets the frame rate
+            self._set_sequence_fps(value)
+            return
         source = self.info.fps
         value = max(1.0, min(source, value))
         self.fps_out = None if value >= source - 0.0005 else value
         self._show_fps()
         self._reencode_changed("fps")
+
+    SEQUENCE_FPS_MAX = 1000.0
+
+    def _set_sequence_fps(self, value: float) -> None:
+        """T36: rate of the frames, no upper limit (but sane). Trim, crop and the frame
+        stay where they were — counted in frames."""
+        value = max(1.0, min(self.SEQUENCE_FPS_MAX, round(value, 3)))
+        info = self.info
+        if abs(value - info.fps) < 0.0005:
+            self._show_fps()
+            return
+        fps = info.fps
+        keep = {
+            "position": round(self._position() * fps),
+            "in": round(self.trim_in * fps), "out": round(self.trim_out * fps),
+            "trim": self.trim_button.isChecked(), "crop_on": self.crop_button.isChecked(),
+            "crop": QRect(self.crop), "scale": self.scale, "fmt": self.fmt,
+            "playing": self.video.playing,
+        }
+        self._open_info(self.source, with_fps(info, value), keep)
+
+    def _restore_kept(self, keep: dict) -> None:
+        fps = self.info.fps
+        last = len(self.info.sequence.files) - 1
+        self.trim_in = min(keep["in"], last) / fps
+        self.trim_out = min(keep["out"], last) / fps
+        self._set_checked(self.trim_button, keep["trim"])
+        self.crop = keep["crop"]
+        self.video.set_crop(self.crop)
+        self._set_checked(self.crop_button, keep["crop_on"])
+        self.video.set_crop_enabled(keep["crop_on"])
+        self.scale = keep["scale"]
+        self.scale_button.setText(format_scale(self.scale))
+        self.fmt = keep["fmt"]
+        self._show_format()
+        self._show_times()
+        self._show_crop()
+        self._update_loop()
+        self._seek_when_loaded(min(keep["position"], last) / fps, tries=40)
+
+    def _seek_when_loaded(self, target: float, tries: int) -> None:
+        """A seek sent while mpv is still loading is dropped — wait until it plays."""
+        if self.video.time_pos is not None or tries <= 0:
+            self._show_at(target)
+            return
+        QTimer.singleShot(50, lambda: self._seek_when_loaded(target, tries - 1))
 
     def _fps_committed(self, text: str) -> None:
         if not self._editable() or not self.info.fps:
@@ -1666,6 +1764,14 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------ right-button drag (PureRef)
     RMB_DRAG = 5             # px before a right press moves the window instead of the menu
+
+    @staticmethod
+    def _is_export_key(event) -> bool:
+        mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if mods not in (Qt.KeyboardModifier.ControlModifier,
+                        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            return False
+        return event.key() == Qt.Key.Key_E or (win_frame.ENABLED and event.nativeVirtualKey() == 0x45)
 
     def _rmb_event(self, obj, event) -> bool:
         """Right button anywhere in the window: click → menu, drag → move the window.
@@ -1893,6 +1999,18 @@ class MainWindow(QMainWindow):
             self.video.zoom_actual()
             self.toast.show_message("100%", action=False, ms=1200)
 
+    def _stem(self) -> str:
+        """Base name for exports: the file's stem, or the sequence name (shot_#### → shot)."""
+        if self.info is not None and self.info.sequence is not None:
+            return self.info.sequence.stem
+        return self.source.stem
+
+    def _last_frame_number(self) -> int:
+        info = self.info
+        if info.sequence is not None:
+            return info.sequence.numbers[-1]
+        return round(info.duration * (info.fps or 0.0))
+
     def _asks_where(self) -> bool:
         return self.config.get("save_to") == "ask"
 
@@ -1912,7 +2030,7 @@ class MainWindow(QMainWindow):
             self._export_png(ask)
             return
         kind, suffix = self._kind(), self._suffix()
-        default = self.source.with_name(f"{self.source.stem}.cut{suffix}")
+        default = self.source.with_name(f"{self._stem()}.cut{suffix}")
 
         if not ask:
             self._start_export(unique_path(default))
@@ -1964,8 +2082,11 @@ class MainWindow(QMainWindow):
         if kind == "png":      # output = folder; frames are numbered by source frame (T19b)
             fps = info.fps or 0.0
             start_number = round(start * fps)          # rounds back to the In frame
+            if info.sequence is not None:              # T36: the In frame's own number
+                first, _count = sequence_range(info, start, duration)
+                start_number = info.sequence.numbers[first]
             output.mkdir(parents=True, exist_ok=True)
-            output = png_pattern(output, self.source.stem, round(info.duration * fps))
+            output = png_pattern(output, self._stem(), self._last_frame_number())
         try:
             job = ExportJob(
                 source=self.source, info=info,
@@ -2051,10 +2172,10 @@ class MainWindow(QMainWindow):
     def _export_png(self, ask: bool) -> None:
         """Frames go straight into a folder: name.cut\\ next to the source, or a picked one."""
         if not ask:
-            folder = self.source.with_name(f"{self.source.stem}.cut")
+            folder = self.source.with_name(f"{self._stem()}.cut")
             counter = 2
             while folder.exists():
-                folder = self.source.with_name(f"{self.source.stem}.cut-{counter}")
+                folder = self.source.with_name(f"{self._stem()}.cut-{counter}")
                 counter += 1
         else:
             chosen = QFileDialog.getExistingDirectory(self, "Export PNG sequence to",
@@ -2077,6 +2198,7 @@ class MainWindow(QMainWindow):
 
     def _png_done(self, job: ExportJob, success: bool, error: str) -> None:
         folder = job.final_output.parent
+        self._drop_gap_frames(job)
         count = len(self._png_frames(job))
         self._toast_path = folder
         if success:
@@ -2095,6 +2217,21 @@ class MainWindow(QMainWindow):
             self.toast.show_message(f"Export cancelled · {count} frames kept", action=True)
         else:
             self.toast.show_message("Export cancelled", action=False, ms=3000)
+
+    @staticmethod
+    def _drop_gap_frames(job: ExportJob) -> None:
+        """T36: missing source frames stay missing in a .png export (shot_1012.png isn't
+        written) — the numbering keeps matching the source, the gap stays visible."""
+        sequence = job.info.sequence
+        if sequence is None:
+            return
+        for first, last in sequence.missing():
+            for number in range(first, last + 1):
+                try:
+                    (job.final_output.parent / (job.final_output.name % number)).unlink(
+                        missing_ok=True)
+                except (OSError, TypeError):
+                    pass
 
     # ---------------------------------------------------- Copy Frame (T19a)
     def copy_frame(self) -> None:
@@ -2124,7 +2261,14 @@ class MainWindow(QMainWindow):
         if image.isNull():
             self.toast.show_message("Could not copy the frame", action=False, error=True, ms=4000)
             return
-        QApplication.clipboard().setImage(image)
+        mime = QMimeData()
+        mime.setImageData(image)
+        if image.hasAlphaChannel():
+            # T36: the bitmap formats drop transparency; Figma, Photoshop and browsers
+            # read the PNG one
+            mime.setData("PNG", data)
+            mime.setData("image/png", data)
+        QApplication.clipboard().setMimeData(mime)
         self.toast.show_message(f"Frame copied · {image.width()}×{image.height()}",
                                 action=False, ms=2500)
 
