@@ -230,7 +230,8 @@ class HotkeysPopover(Popover):
         row = len(HOTKEY_ACTIONS)
         self._refs = []
         for title, keys in (("Frames / Timecode", "Ctrl+Click ⌛"),
-                            ("Frame-Exact Scrub", "Alt+Drag")):
+                            ("Frame-Exact Scrub", "Alt+Drag"),
+                            ("Resize with Video Aspect", "Shift+Drag Edge")):   # T44
             grid.addWidget(QLabel(title), row, 0)
             ref = dim_label(keys)
             ref.setAlignment(Qt.AlignmentFlag.AlignCenter)       # centered like the key caps

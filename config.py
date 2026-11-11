@@ -19,6 +19,7 @@ DEFAULTS = {
     "last_used": "0",        # T25: open with the format of the last export
     "last_format": "",       # T25: format of the last successful export
     "frames_mode": "0",      # T39: show frames instead of timecode
+    "pin_on_top": "0",       # T45: window stays above others (remembered)
 }
 
 
@@ -78,6 +79,8 @@ MENU_SHORTCUTS = {
     "actual_size": ("Actual Size", "Ctrl+1"), # T20
     "minimize_ui": ("Minimize UI", "Ctrl+Shift+\\"),   # T27
     "hide_ui": ("Hide UI", "Ctrl+\\"),                  # T27
+    "fit_window": ("Fit Window to Video", "Ctrl+Shift+R"),  # T43
+    "pin": ("Pin on Top", "Ctrl+Shift+A"),                  # T45 (↔ Unpin)
     "quit": ("Quit", "Ctrl+Q"),
 }
 

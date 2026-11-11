@@ -113,3 +113,101 @@ def edge_hit(x: int, y: int, width: int, height: int, band: int) -> int:
     if bottom:
         return HTBOTTOM
     return 0
+
+
+# ------------------------------------------------ T44 / T45 (group 6: window as PiP)
+WM_SIZING = 0x0214
+WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT = 1, 2, 3, 4
+WMSZ_TOPRIGHT, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT = 5, 6, 7, 8
+_VK_SHIFT = 0x10
+
+
+def shift_down() -> bool:
+    """Shift held right now (WM_SIZING carries no key state)."""
+    return ENABLED and bool(_user32.GetAsyncKeyState(_VK_SHIFT) & 0x8000)
+
+
+def sizing_rect(lparam):
+    """The RECT that WM_SIZING lets us change in place (window rect, physical px)."""
+    return wintypes.RECT.from_address(int(lparam))
+
+
+def keep_aspect(rect, edge: int, extra_w: int, extra_h: int, aspect: float,
+                min_w: int, min_h: int, max_w: int, max_h: int) -> None:
+    """T44: change the dragged RECT so the video area (window minus `extra`) keeps
+    `aspect` (w/h). The dragged edge leads: left/right → width, top/bottom → height,
+    a corner → whichever moved more. The opposite edge/corner stays put. At the
+    window's minimum it stops at the smallest size that keeps the aspect, at the
+    screen's size it stops growing; when the two disagree (a tall video with the full
+    panels) the aspect can't be kept and it's a plain resize."""
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    free_w, free_h = w, h                # the plain drag, if the aspect can't be kept
+    vw, vh = max(1, w - extra_w), max(1, h - extra_h)
+    if edge in (WMSZ_LEFT, WMSZ_RIGHT):
+        by_width = True
+    elif edge in (WMSZ_TOP, WMSZ_BOTTOM):
+        by_width = False
+    else:   # corner: the axis that moved further from the aspect leads
+        by_width = vw / aspect >= vh
+    if by_width:
+        h = round(max(1, w - extra_w) / aspect) + extra_h
+    else:
+        w = round(max(1, h - extra_h) * aspect) + extra_w
+    # not past the screen: the window stops growing there (keeps the aspect)
+    if h > max_h:
+        h = max_h
+        w = round((h - extra_h) * aspect) + extra_w
+    if w > max_w:
+        w = max_w
+        h = round((w - extra_w) / aspect) + extra_h
+    # at the minimum size: stop at the smallest window that still keeps the aspect
+    if w < min_w:
+        w = min_w
+        h = round((w - extra_w) / aspect) + extra_h
+    if h < min_h:
+        h = min_h
+        w = round((h - extra_h) * aspect) + extra_w
+    if w > max_w or h > max_h:           # min and screen disagree: a plain resize
+        w, h = min(free_w, max_w), min(free_h, max_h)
+    w, h = max(w, min_w), max(h, min_h)
+    # anchor the opposite side
+    if edge in (WMSZ_LEFT, WMSZ_TOPLEFT, WMSZ_BOTTOMLEFT):
+        rect.left = rect.right - w
+    else:
+        rect.right = rect.left + w
+    if edge in (WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT):
+        rect.top = rect.bottom - h
+    else:
+        rect.bottom = rect.top + h
+
+
+def set_topmost(hwnd, on: bool) -> None:
+    """T45: Pin on Top through WinAPI — Qt's WindowStaysOnTopHint re-creates the
+    native window, which breaks the OpenGL view and the Hide UI frame."""
+    if not ENABLED or not hwnd:
+        return
+    swp_nosize, swp_nomove, swp_noactivate = 0x0001, 0x0002, 0x0010
+    after = wintypes.HWND(-1 if on else -2)       # HWND_TOPMOST / HWND_NOTOPMOST
+    _user32.SetWindowPos(wintypes.HWND(int(hwnd)), after, 0, 0, 0, 0,
+                         swp_nosize | swp_nomove | swp_noactivate)
+
+
+def window_size(hwnd) -> tuple[int, int, int, int] | None:
+    """(width, height, invisible_w, invisible_h) of the native window in physical px.
+    The size is the same box WM_SIZING hands us — with Windows 11's invisible resize
+    borders (Qt's frameGeometry doesn't match it); invisible_* is how much of it
+    isn't drawn (DWM's extended frame bounds), so the visible window can fill the screen."""
+    if not ENABLED or not hwnd:
+        return None
+    handle = wintypes.HWND(int(hwnd))
+    rect = wintypes.RECT()
+    if not _user32.GetWindowRect(handle, ctypes.byref(rect)):
+        return None
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    shown = wintypes.RECT()
+    dwmwa_extended_frame_bounds = 9
+    if _dwm.DwmGetWindowAttribute(handle, dwmwa_extended_frame_bounds,
+                                  ctypes.byref(shown), ctypes.sizeof(shown)) != 0:
+        return w, h, 0, 0
+    return w, h, w - (shown.right - shown.left), h - (shown.bottom - shown.top)
+
