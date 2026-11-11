@@ -180,6 +180,9 @@ def format_ranges(ranges: list[tuple[int, int]], limit: int = 3) -> str:
     return ", ".join(parts) + (f" (+{more} more)" if more > 0 else "")
 
 
+ALPHA_PIX_FMTS = ("yuva", "rgba", "bgra", "argb", "abgr", "gbrap", "ya")
+
+
 @dataclass(frozen=True)
 class MediaInfo:
     duration: float
@@ -199,10 +202,12 @@ class MediaInfo:
 
     @property
     def alpha(self) -> bool:
-        """Sequences with transparency: checkerboard in the view, black in .mp4/.gif,
-    kept in .png and Copy Frame."""
-        return self.sequence is not None and ("a" in self.pix_fmt.replace("gray", "")
-                                              or self.pix_fmt.startswith("ya"))
+        """Transparency (PNG sequences, ProRes 4444 / 4444 XQ, QuickTime Animation…):
+        checkerboard in the view, black in .mp4/.gif, kept in .png and Copy Frame."""
+        fmt = self.pix_fmt
+        if fmt.startswith(ALPHA_PIX_FMTS):
+            return True
+        return self.sequence is not None and fmt == "pal8"    # PNG palette with tRNS
 
     @property
     def hdr(self) -> bool:
