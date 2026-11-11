@@ -55,6 +55,8 @@ if errorlevel 1 goto error
 
 for /f %%v in ('python -c "from version import VERSION; print(VERSION)"') do set VERSION=%%v
 
+python tools\build_info.py
+if errorlevel 1 goto error
 
 rem ---------------------------------------------------------------- program
 python -m PyInstaller ^

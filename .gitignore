@@ -9,6 +9,9 @@ build/
 dist/
 *.spec
 
+# branch · commit for the Settings line, written by build.bat
+/build_info.py
+
 # Third-party binaries — downloaded for the build, shipped via Releases
 *.exe
 *.dll

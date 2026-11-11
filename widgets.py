@@ -546,6 +546,12 @@ class Timeline(QWidget):
         self._moved = False
         self._last_move = 0.0
         self._pan: tuple[float, float] | None = None   # (press x, view_start at press)
+        # Alt+drag: frame-exact scrub, 1 px = 1 frame relative to where Alt went down;
+        # after Alt is let go the playhead stays until the mouse moves again (so letting
+        # Alt go a moment before the button doesn't lose the frame).
+        self.fine = False
+        self._fine_anchor: tuple[float, float] | None = None   # (x, t) when Alt went down
+        self._park_x: float | None = None                       # x when Alt was let go
         self.frames_mode = False        # T39: ruler in frame numbers
 
     # --- state
@@ -712,7 +718,12 @@ class Timeline(QWidget):
             return
         self._press_x = x
         self._moved = False
+        self.fine, self._fine_anchor, self._park_x = False, None, None
         self._drag = self._edge_at(x) or "seek"
+        if self._drag == "seek" and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            # Alt+press: frame scrub from where the playhead is — no jump to the cursor
+            self.fine, self._fine_anchor, self._moved = True, (x, self.position), True
+            return
         if self._drag == "seek":
             # Exact seek right away — no keyframe preview that flickers back.
             self.position = self._t(x)
@@ -729,6 +740,18 @@ class Timeline(QWidget):
             edge = self._edge_at(x)
             self.setCursor(Qt.CursorShape.SizeHorCursor if edge else Qt.CursorShape.ArrowCursor)
             return
+        alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier) and self._drag == "seek"
+        if alt and self._fine_anchor is None:
+            self._fine_anchor = (x, self.position)
+            self._park_x = None
+            self._moved = True
+        elif not alt and self._fine_anchor is not None:
+            self._fine_anchor, self._park_x = None, x
+        self.fine = alt
+        if self._park_x is not None:
+            if abs(x - self._park_x) < self.DRAG_START:
+                return
+            self._park_x = None
         if not self._moved and abs(x - self._press_x) < self.DRAG_START:
             return
         self._moved = True
@@ -748,12 +771,21 @@ class Timeline(QWidget):
         if not self._drag or event.button() != Qt.MouseButton.LeftButton:
             return
         if self._moved:
-            self._apply(event.position().x(), final=True)
+            if self._fine_anchor is not None or self._park_x is not None:
+                self.seek_requested.emit(self.position, True)     # the frame found with Alt
+            else:
+                self._apply(event.position().x(), final=True)
         self._drag = None
+        self.fine, self._fine_anchor, self._park_x = False, None, None
         self._last_move = 0.0
 
     def _apply(self, x: float, final: bool) -> None:
-        t = self._t(x)
+        if self._fine_anchor is not None:
+            anchor_x, anchor_t = self._fine_anchor
+            t = anchor_t + round(x - anchor_x) * self.frame_duration
+            t = max(0.0, min(self.duration, t))
+        else:
+            t = self._t(x)
         if self._drag == "seek":
             self.position = t
             self.update()

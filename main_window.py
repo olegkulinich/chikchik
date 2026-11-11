@@ -108,7 +108,10 @@ def format_scale(value: float) -> str:
 
 
 FORMATS = ("mp4", "gif", "png", "copy")   # T25: same order everywhere; copy = Original
-EXACT_SCRUB_SPAN = 60.0   # s visible on the timeline or less → exact seeks while dragging
+# 1b: exact seeks while dragging once a pixel of the timeline covers this many frames or
+# fewer (was "≤ 60 s visible": too late in a wide window, too early in a narrow one).
+# Intra-only sources (sequences, ProRes…) always seek exactly.
+EXACT_SCRUB_FRAMES_PER_PX = 4.0
 
 
 def parse_time(text: str) -> float | None:
@@ -147,7 +150,6 @@ class MenuRow(QWidget):
         `submenu` — the row opens a submenu (▸, a click doesn't close the menu).
         `root` — for rows inside a submenu: the top menu, closed too on click."""
         super().__init__()
-        self._hover = False
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.setMouseTracking(True)
         self.menu, self.callback, self.enabled = menu, callback, enabled
@@ -202,16 +204,10 @@ class MenuRow(QWidget):
             right.addWidget(check)
         layout.addLayout(right)
 
-    def enterEvent(self, event):
-        self._hover = self.enabled
-        self.update()
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-
+    # Highlight = the menu's "hot" row, set by a cursor poll (_MenuHover): Qt's hover,
+    # leave and activeAction go stale once submenus open and grab the mouse (#12).
     def paintEvent(self, event):
-        if self._hover:
+        if self.enabled and getattr(self.menu, "_hot_row", None) is self:
             from PySide6.QtGui import QColor, QPainter
             p = QPainter(self)
             p.fillRect(self.rect(), QColor(theme.BUTTON_HOVER))
@@ -226,6 +222,51 @@ class MenuRow(QWidget):
                 self.root.close()
             if self.callback:
                 QTimer.singleShot(0, self.callback)
+
+
+class _MenuHover:
+    """Exactly one lit row per menu: the enabled row under the cursor; with the cursor
+    elsewhere — the row whose submenu is open; otherwise none. Polled while shown."""
+
+    def __init__(self, menu: QMenu):
+        self.menu = menu
+        self.timer = QTimer(menu)
+        self.timer.setInterval(30)
+        self.timer.timeout.connect(self.tick)
+        menu.aboutToShow.connect(self._start)
+        menu.aboutToHide.connect(self._stop)
+        menu._hot_row = None
+
+    def _start(self):
+        self.timer.start()
+        QTimer.singleShot(0, self.tick)
+
+    def _stop(self):
+        self.timer.stop()
+        self._set(None)
+
+    def tick(self):
+        pos = QCursor.pos()
+        hot = None
+        open_owner = None
+        for row in self.menu.findChildren(MenuRow):
+            if not row.isVisible():
+                continue
+            if row.enabled and row.rect().contains(row.mapFromGlobal(pos)):
+                hot = row
+            sub = getattr(row, "sub_menu", None)
+            if sub is not None and sub.isVisible():
+                open_owner = row
+        self._set(hot or open_owner)
+
+    def _set(self, row):
+        old = getattr(self.menu, "_hot_row", None)
+        if old is row:
+            return
+        self.menu._hot_row = row
+        for widget in (old, row):
+            if widget is not None:
+                widget.update()
 
 
 class _Reveal:
@@ -747,6 +788,7 @@ class MainWindow(QMainWindow):
         menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        menu._hover = _MenuHover(menu)
         return menu
 
     @staticmethod
@@ -779,10 +821,12 @@ class MainWindow(QMainWindow):
 
         def submenu_row(title: str, hint: str, sub: QMenu, enabled: bool = True):
             action = QWidgetAction(menu)
-            action.setDefaultWidget(MenuRow(menu, title, hint, enabled, submenu=True))
+            menu_row = MenuRow(menu, title, hint, enabled, submenu=True)
+            action.setDefaultWidget(menu_row)
             action.setEnabled(enabled)
             if enabled:
                 action.setMenu(sub)
+                menu_row.sub_menu = sub
             menu.addAction(action)
 
         row("hotkeys")
@@ -805,17 +849,20 @@ class MainWindow(QMainWindow):
         # T27: names say what a click does
         row("minimize_ui", title="Restore UI" if self._ui_mode == "minimal" else "Minimize UI")
         row("hide_ui", title="Show UI" if self._ui_mode == "hidden" else "Hide UI")
-        if self.info is not None:
+        if self.info is not None and (self.info.audio or self.info.subtitles):
             # T40a: tracks in submenus (films can carry 20 subtitle tracks); the row shows
-            # the current choice
+            # the current choice. Each row only when the file has such tracks (no sound —
+            # no Audio Track, as with Subtitles).
             idle = self.worker is None
             menu.addSeparator()
-            audio = self._new_menu()
-            tracks: list[AudioTrack | None] = [*self.info.audio, None]
-            for track in tracks:
-                self._menu_choice(audio, track.label() if track else "None", track == self.audio,
-                                  lambda t=track: self.set_audio(t), idle, root=menu)
-            submenu_row("Audio Track", _short_track(self.audio), audio)
+            if self.info.audio:
+                audio = self._new_menu()
+                tracks: list[AudioTrack | None] = [*self.info.audio, None]
+                for track in tracks:
+                    self._menu_choice(audio, track.label() if track else "None",
+                                      track == self.audio, lambda t=track: self.set_audio(t),
+                                      idle, root=menu)
+                submenu_row("Audio Track", _short_track(self.audio), audio)
             if self.info.subtitles:
                 subs_menu = self._new_menu()
                 subs: list[SubtitleTrack | None] = [None, *self.info.subtitles]
@@ -1010,6 +1057,8 @@ class MainWindow(QMainWindow):
         t = self._snap(t)
         self.timeline.show_position(t)
         self.time_field.setText(self._fmt(t))
+        if final and perf_log.ENABLED:
+            perf_log.log(f"final  frame {self._frame_no(t)}")
         if final:
             self._exact_timer.stop()
             if self._scrub_active:
@@ -1027,21 +1076,38 @@ class MainWindow(QMainWindow):
             self._hold_target, self._hold_until = t, time.monotonic() + 0.5
             self._nudge_target, self._nudge_stamp = t, time.monotonic()
             return
+        exact = self._exact_scrub()
         if not self._scrub_active:
             self._scrub_active = True
-            self.video.set_scrub_mode(True)
-        # T9: keyframe seeks are fastest across the whole file, but zoomed in the
-        # whole drag fits between two keyframes (anime/films: every 2–10 s) and the
-        # picture wouldn't change — there, seek exactly (the queue keeps the UI smooth).
-        exact = self.timeline.view_end - self.timeline.view_start <= EXACT_SCRUB_SPAN
+            if not self.info.intra_only:     # lighter decoding only helps H.264/HEVC
+                self.video.set_scrub_mode(True)
         moved = self._scrub_t is None or abs(t - self._scrub_t) >= self._step(False) / 2
         self._scrub_t = t
         if not moved:          # jitter under a frame: keep the rest timer running
             return
+        if perf_log.ENABLED:
+            perf_log.log(f"drag   frame {self._frame_no(t)} {'exact' if exact else 'kf'}")
         self.video.seek(t, exact)
         if not exact:
             self._kf_drag = True
             self._exact_timer.start()     # T18: at rest the playhead moves to the picture
+        else:
+            # an exact seek shows the playhead's frame: release seeks exactly (no T18 follow)
+            self._kf_drag = False
+            self._exact_timer.stop()
+
+    def _exact_scrub(self) -> bool:
+        """T9 / 1b: keyframe seeks are fastest across the whole file, but zoomed in the
+        whole drag fits between two keyframes (every 2–10 s in films) and the picture
+        wouldn't change — there, seek exactly (the queue keeps the UI smooth)."""
+        if self.info.intra_only or self.timeline.fine:     # Alt+drag: always exact
+            return True
+        span = self.timeline.view_end - self.timeline.view_start
+        frames_per_px = span / self._step(False) / max(1, self.timeline.width())
+        return frames_per_px <= EXACT_SCRUB_FRAMES_PER_PX
+
+    def _frame_no(self, t: float) -> int:
+        return int(round(t / self._step(False)))
 
     def _follow_picture(self) -> None:
         """Playhead and ⌛ jump to the frame mpv shows (keyframe scrub)."""
@@ -1549,7 +1615,7 @@ class MainWindow(QMainWindow):
 
     def _reencode_changed(self, reason: str) -> None:
         """Original can't do crop/scale/fps → switch to .mp4 once and say why."""
-        if self.fmt == "copy" and self._needs_reencode():
+        if self.fmt == "copy" and self._needs_reencode() and not self._prores_original():
             self.set_format("mp4")
             self.toast.show_message(f"Original → .mp4: {reason} needs re-encoding",
                                     action=False, ms=4000)
@@ -1659,7 +1725,7 @@ class MainWindow(QMainWindow):
     def set_format(self, fmt: str, explain: bool = False) -> None:
         if fmt not in FORMATS:
             return
-        if fmt == "copy" and self._needs_reencode():
+        if fmt == "copy" and self._needs_reencode() and not self._prores_original():
             if explain:      # T37: the hotkey must not fail silently
                 self.toast.show_message(
                     f"Original unavailable: {self._reencode_reason()} needs re-encoding",
@@ -1674,7 +1740,7 @@ class MainWindow(QMainWindow):
         idle = self.worker is None
         reencode = self._needs_reencode()
         for fmt in FORMATS:
-            blocked = fmt == "copy" and reencode
+            blocked = fmt == "copy" and reencode and not self._prores_original()
             self._menu_choice(menu, self._format_label(fmt), fmt == self.fmt,
                               lambda f=fmt: self.set_format(f), idle and not blocked,
                               check_column=True)
@@ -1733,9 +1799,16 @@ class MainWindow(QMainWindow):
         else:
             self.export(ask=self._asks_where())   # T42: the button follows Save To
 
+    def _prores_original(self) -> bool:
+        """T46: Original stays possible with crop/scale/fps — re-encoded into ProRes."""
+        return self.info is not None and self.info.prores
+
     def _kind(self) -> str:
-        """mp4 | gif | png | copy — Original falls back to mp4 if something needs re-encoding."""
-        return "mp4" if self.fmt == "copy" and self._needs_reencode() else self.fmt
+        """mp4 | gif | png | copy | prores — Original falls back to mp4 if something needs
+        re-encoding; a ProRes source re-encodes into its own profile instead (T46)."""
+        if self.fmt == "copy" and self._needs_reencode():
+            return "prores" if self._prores_original() else "mp4"
+        return self.fmt
 
     def _suffix(self) -> str:
         kind = self._kind()
@@ -2053,7 +2126,7 @@ class MainWindow(QMainWindow):
         if kind == "gif" and out_suffix != ".gif":
             self._error("Export", "GIF export writes a .gif file.")
             return
-        if kind == "copy" and out_suffix != self.source.suffix.lower():
+        if kind in ("copy", "prores") and out_suffix != self.source.suffix.lower():
             self._error("Export", f"Original keeps the source container ({self.source.suffix}).")
             return
         if same_path(output, self.source):
