@@ -147,7 +147,6 @@ class MenuRow(QWidget):
         `submenu` — the row opens a submenu (▸, a click doesn't close the menu).
         `root` — for rows inside a submenu: the top menu, closed too on click."""
         super().__init__()
-        self._hover = False
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.setMouseTracking(True)
         self.menu, self.callback, self.enabled = menu, callback, enabled
@@ -202,16 +201,23 @@ class MenuRow(QWidget):
             right.addWidget(check)
         layout.addLayout(right)
 
+    # Highlight = the menu's active action, not enter/leave: once a submenu opens, Qt
+    # grabs the mouse and the row never hears "leave" — Audio/Subtitles stayed lit.
+    def _action(self):
+        for action in self.menu.actions():
+            if getattr(action, "defaultWidget", lambda: None)() is self:
+                return action
+        return None
+
     def enterEvent(self, event):
-        self._hover = self.enabled
         self.update()
 
     def leaveEvent(self, event):
-        self._hover = False
         self.update()
 
     def paintEvent(self, event):
-        if self._hover:
+        action = self._action()
+        if self.enabled and action is not None and self.menu.activeAction() is action:
             from PySide6.QtGui import QColor, QPainter
             p = QPainter(self)
             p.fillRect(self.rect(), QColor(theme.BUTTON_HOVER))
@@ -747,6 +753,8 @@ class MainWindow(QMainWindow):
         menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        menu.hovered.connect(lambda _action, m=menu: [row.update()
+                                                      for row in m.findChildren(MenuRow)])
         return menu
 
     @staticmethod
