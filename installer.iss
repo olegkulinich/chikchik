@@ -59,6 +59,11 @@ Source: "ffmpeg\LICENSE"; DestDir: "{app}\licenses"; DestName: "FFmpeg-LICENSE.t
 Source: "fonts\LICENSE-Inter.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "icons\LICENSE-FluentEmoji.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
+[Tasks]
+; First install only (Check: IsFirstInstall) — on updates the choice lives in
+; Settings → Explorer Menu and the page isn't shown.
+Name: "contextmenu"; Description: "Add ""{#AppName}"" and ""{#AppName} → GIF"" to the Explorer right-click menu"; Check: IsFirstInstall
+
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 
@@ -99,7 +104,7 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait pos
 
 [Code]
 { T30: Explorer right-click items "ChikChik!" / "ChikChik! → GIF" (HKCU).
-  First install: both are added. Update: the user's choice (Settings → Explorer Menu)
+  First install: both are added if the "contextmenu" checkbox is on (default). Update: the user's choice (Settings → Explorer Menu)
   stays — items that exist only get the new title, icon and command. Uninstall: removed.
   Key names QuickTrimCrop / QuickTrimCropGIF stay (Explorer sorts verbs by key name). }
 
@@ -108,6 +113,11 @@ const
 
 var
   FirstInstall: Boolean;
+
+function IsFirstInstall(): Boolean;
+begin
+  Result := FirstInstall;
+end;
 
 function Extensions(I: Integer): String;
 begin
@@ -144,7 +154,8 @@ begin
   for I := 0 to 7 do
   begin
     Ext := Extensions(I);
-    if FirstInstall or RegKeyExists(HKCU, ShellRoot + Ext + '\shell\' + KeyName) then
+    if (FirstInstall and WizardIsTaskSelected('contextmenu'))
+       or (not FirstInstall and RegKeyExists(HKCU, ShellRoot + Ext + '\shell\' + KeyName)) then
       WriteItem(Ext, KeyName, Title, Icon, '"' + Exe + '"' + Args + ' "%1"');
   end;
 end;
