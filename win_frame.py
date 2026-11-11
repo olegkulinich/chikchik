@@ -227,3 +227,61 @@ def set_border_black(hwnd, black: bool) -> None:
                                    ctypes.byref(color), ctypes.sizeof(color))
     except Exception:
         pass                           # Windows 10: no such attribute
+
+
+# Fullscreen frame: Qt's border-in-fullscreen is a classic WS_BORDER that Windows paints
+# grey itself (DWMWA_BORDER_COLOR doesn't reach it) — paint it black ourselves.
+WM_NCPAINT = 0x0085
+WM_NCACTIVATE = 0x0086
+
+if ENABLED:
+    _gdi32 = ctypes.windll.gdi32
+    _user32.DefWindowProcW.restype = ctypes.c_ssize_t
+    _user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                       wintypes.LPARAM]
+    _user32.GetWindowDC.restype = wintypes.HDC
+    _user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    _gdi32.GetStockObject.restype = wintypes.HGDIOBJ
+
+
+def paint_frame_black(hwnd) -> None:
+    """Fill the non-client strip (the 1 px border) black, leaving the client alone."""
+    if not ENABLED or not hwnd:
+        return
+    handle = wintypes.HWND(int(hwnd))
+    window, client = wintypes.RECT(), wintypes.RECT()
+    if not (_user32.GetWindowRect(handle, ctypes.byref(window))
+            and _user32.GetClientRect(handle, ctypes.byref(client))):
+        return
+    origin = wintypes.POINT(0, 0)
+    _user32.ClientToScreen(handle, ctypes.byref(origin))
+    left, top = origin.x - window.left, origin.y - window.top
+    whole = wintypes.RECT(0, 0, window.right - window.left, window.bottom - window.top)
+    hdc = _user32.GetWindowDC(handle)
+    if not hdc:
+        return
+    try:
+        _gdi32.ExcludeClipRect(hdc, left, top, left + client.right, top + client.bottom)
+        black_brush = 4
+        _user32.FillRect(hdc, ctypes.byref(whole), _gdi32.GetStockObject(black_brush))
+    finally:
+        _user32.ReleaseDC(handle, hdc)
+
+
+def nc_activate(hwnd, wparam) -> int:
+    """WM_NCACTIVATE without letting Windows repaint the frame grey (lParam = -1)."""
+    return _user32.DefWindowProcW(wintypes.HWND(int(hwnd)), WM_NCACTIVATE,
+                                  wintypes.WPARAM(int(wparam)), wintypes.LPARAM(-1))
+
+
+def set_nc_rendering(hwnd, dwm_draws: bool) -> None:
+    """Fullscreen: DWM stops drawing the frame, so our black paint is what shows."""
+    if not ENABLED or not hwnd:
+        return
+    try:
+        policy = wintypes.DWORD(0 if dwm_draws else 1)   # USEWINDOWSTYLE / DISABLED
+        dwmwa_ncrendering_policy = 2
+        _dwm.DwmSetWindowAttribute(wintypes.HWND(int(hwnd)), dwmwa_ncrendering_policy,
+                                   ctypes.byref(policy), ctypes.sizeof(policy))
+    except Exception:
+        pass
