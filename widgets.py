@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 import math
 import time
 
-from PySide6.QtGui import QCursor, QInputDevice, QPointingDevice
+from PySide6.QtGui import QCursor, QFont, QFontDatabase, QInputDevice, QPointingDevice
 
 import perf_log
 import theme
@@ -47,6 +47,7 @@ def dim_label(text: str) -> QLabel:
 class _FieldEdit(QLineEdit):
     escaped = Signal()
     stepped = Signal(int, bool)      # ↑/↓: steps, coarse
+    tabbed = Signal(bool)            # 12.24: Tab / Shift+Tab (backward)
 
     # Keys the field keeps for itself even if a window hotkey uses them
     # (←/→ move the text cursor instead of jumping frames).
@@ -54,11 +55,18 @@ class _FieldEdit(QLineEdit):
         Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter,
         Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down,
         Qt.Key.Key_Home, Qt.Key.Key_End, Qt.Key.Key_Backspace, Qt.Key.Key_Delete,
+        Qt.Key.Key_Tab, Qt.Key.Key_Backtab,
     )
 
     def event(self, event):
         if event.type() == QEvent.Type.ShortcutOverride and event.key() in self.OWN_KEYS:
             event.accept()
+            return True
+        if event.type() == QEvent.Type.KeyPress \
+                and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            # 12.24: before QWidget's own focus chain (the edits aren't in it — NoFocus)
+            self.tabbed.emit(event.key() == Qt.Key.Key_Backtab
+                             or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
             return True
         return super().event(event)
 
@@ -113,14 +121,17 @@ class FieldGroup(QWidget):
 class Field(QFrame):
     """Figma-style input: dim prefix (or icon) + value.
 
-    Click → edit (Enter applies, Esc reverts; both return focus to the video).
-    ↑/↓ while editing, drag with LMB/MMB or turn the wheel → `nudged(steps, coarse)`;
-    Shift = coarse step. Dragging is endless (Blender-style): the hidden cursor is
-    quietly put back to the press point every WARP px.
+    Click on the value → edit, the value selected; drag on it selects text (12.25).
+    Enter applies, Esc reverts; both return focus to the video; Tab → the next field.
+    Drag on the label (or the padding) with LMB, or anywhere with MMB, or turn the
+    wheel → `nudged(steps, coarse)`; ↑/↓ while editing too; Shift = coarse step.
+    Dragging is endless (Blender-style): the hidden cursor is quietly put back to the
+    press point every WARP px.
     """
 
     committed = Signal(str)
     nudged = Signal(int, bool)
+    tabbed = Signal(bool)          # 12.24: Tab (False) / Shift+Tab (True) while editing
     ctrl_clicked = Signal()        # T39: Ctrl+click (Cmd on macOS) on the ⌛ field
     scrub_started = Signal()
     scrub_finished = Signal()
@@ -138,6 +149,7 @@ class Field(QFrame):
         layout.setSpacing(6)     # T34c: + QLineEdit's own ~2 px → reads as 8
         self.prefix = icon if icon is not None else dim_label(prefix)
         self.prefix.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)        # the padding scrubs too
         self.edit = _FieldEdit()
         self.edit.setFrame(False)
         # Focus only via a plain click (see _release) — otherwise Qt focuses the
@@ -157,11 +169,13 @@ class Field(QFrame):
         self._scrubbing = False
         self._pen = False
         self._acc = 0.0
+        self._select_press: QPoint | None = None   # 12.25: LMB on the value → text select
         for widget in (self.edit, self.prefix):
             widget.installEventFilter(self)
         self.edit.editingFinished.connect(self._finish)
         self.edit.escaped.connect(self._escape)
         self.edit.stepped.connect(self._arrow_step)
+        self.edit.tabbed.connect(self.tabbed)
 
     def setText(self, text: str) -> None:
         self._value = text
@@ -284,13 +298,31 @@ class Field(QFrame):
                 self.nudged.emit(steps, coarse)
         event.accept()
 
+    def _select_on_value(self, obj, event) -> bool:
+        """12.25: LMB on the value edits it like a normal text field (drag selects);
+        scrubbing stays on the label/padding (LMB) and anywhere with MMB."""
+        return (obj is self.edit and event.button() == Qt.MouseButton.LeftButton
+                and self.edit.isEnabled() and not self.edit.hasFocus()
+                and not (self.ctrl_click
+                         and event.modifiers() & Qt.KeyboardModifier.ControlModifier))
+
     def eventFilter(self, obj, event):
         kind = event.type()
         if kind == QEvent.Type.MouseButtonPress:
+            if self._select_on_value(obj, event):
+                self._select_press = event.globalPosition().toPoint()
+                self.edit.setFocus(Qt.FocusReason.MouseFocusReason)
+                return False                 # QLineEdit places the cursor / starts selecting
             return self._press(event)
         if kind == QEvent.Type.MouseMove:
             return self._move(event)
         if kind == QEvent.Type.MouseButtonRelease:
+            if obj is self.edit and self._select_press is not None:
+                moved = (event.globalPosition().toPoint() - self._select_press).manhattanLength()
+                self._select_press = None
+                if moved < 3:                # a plain click: the whole value, ready to type
+                    QTimer.singleShot(0, self.edit.selectAll)
+                return False
             return self._release(event)
         if kind == QEvent.Type.MouseButtonDblClick and not self.edit.hasFocus():
             return True
@@ -298,8 +330,8 @@ class Field(QFrame):
             self.wheelEvent(event)
             return True
         if obj is self.edit:
-            if kind == QEvent.Type.FocusIn:
-                QTimer.singleShot(0, self.edit.selectAll)
+            if kind == QEvent.Type.FocusIn and self._select_press is None:
+                QTimer.singleShot(0, self.edit.selectAll)   # mouse: selected on release
             elif kind == QEvent.Type.FocusOut:
                 # After editingFinished has been handled: show the applied value.
                 QTimer.singleShot(0, self._sync_text)
@@ -552,6 +584,7 @@ class Timeline(QWidget):
         self.fine = False
         self._fine_anchor: tuple[float, float] | None = None   # (x, t) when Alt went down
         self._park_x: float | None = None                       # x when Alt was let go
+        self._warp_origin: QPoint | None = None   # 12.19: hidden cursor returns here
         self.frames_mode = False        # T39: ruler in frame numbers
         self.frame_offset = 0           # T47: number of frame 0 (sequence file names)
 
@@ -732,6 +765,7 @@ class Timeline(QWidget):
         if self._drag == "seek" and event.modifiers() & Qt.KeyboardModifier.AltModifier:
             # Alt+press: frame scrub from where the playhead is — no jump to the cursor
             self.fine, self._fine_anchor, self._moved = True, (x, self.position), True
+            self._begin_fine(event)
             return
         if self._drag == "seek":
             # Exact seek right away — no keyframe preview that flickers back.
@@ -754,9 +788,14 @@ class Timeline(QWidget):
             self._fine_anchor = (x, self.position)
             self._park_x = None
             self._moved = True
+            self._begin_fine(event)
         elif not alt and self._fine_anchor is not None:
-            self._fine_anchor, self._park_x = None, x
+            self._fine_anchor = None
+            x = self._end_fine()             # the cursor comes back at the playhead
+            self._park_x = x
         self.fine = alt
+        if self._fine_anchor is not None and self._warp_origin is not None:
+            x = self._fine_move()
         if self._park_x is not None:
             if abs(x - self._park_x) < self.DRAG_START:
                 return
@@ -779,6 +818,8 @@ class Timeline(QWidget):
             return
         if not self._drag or event.button() != Qt.MouseButton.LeftButton:
             return
+        if self._fine_anchor is not None:
+            self._end_fine()
         if self._moved:
             if self._fine_anchor is not None or self._park_x is not None:
                 self.seek_requested.emit(self.position, True)     # the frame found with Alt
@@ -787,6 +828,36 @@ class Timeline(QWidget):
         self._drag = None
         self.fine, self._fine_anchor, self._park_x = False, None, None
         self._last_move = 0.0
+
+    # --- 12.19: Alt scrub is endless like the fields — the cursor hides and is put back
+    def _begin_fine(self, event) -> None:
+        if _is_pen(event):
+            return
+        self._warp_origin = event.globalPosition().toPoint()
+        QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+
+    def _fine_move(self) -> float:
+        """x from the real cursor (queued events may predate a warp); far from the
+        origin → put the cursor back and shift the anchor, so the playhead goes on."""
+        origin = self._warp_origin
+        x = float(self.mapFromGlobal(QCursor.pos()).x())
+        if abs(QCursor.pos().x() - origin.x()) > Field.WARP:
+            back = float(self.mapFromGlobal(origin).x())
+            anchor_x, anchor_t = self._fine_anchor
+            self._fine_anchor = (anchor_x + (back - x), anchor_t)
+            QCursor.setPos(origin)
+            x = back
+        return x
+
+    def _end_fine(self) -> float:
+        """Show the cursor again — at the playhead, so a plain drag goes on from there."""
+        if self._warp_origin is None:
+            return float(self.mapFromGlobal(QCursor.pos()).x())
+        self._warp_origin = None
+        QApplication.restoreOverrideCursor()
+        x = max(0.0, min(float(self.width() - 1), self._x(self.position)))
+        QCursor.setPos(self.mapToGlobal(QPoint(round(x), self.height() // 2)))
+        return x
 
     def _apply(self, x: float, final: bool) -> None:
         if self._fine_anchor is not None:
@@ -804,14 +875,23 @@ class Timeline(QWidget):
             self.edge_preview.emit(self.trim_in, final)
         elif self._drag == "out":
             self.out_dragged.emit(t)
-            self.edge_preview.emit(self.trim_out, final)
+            # Out is the boundary after its frame (AE / Resolve) — show that frame
+            self.edge_preview.emit(max(self.trim_in, self.trim_out - self.frame_duration), final)
 
 
 # -------------------------------------------------------------- popover
 
 
+def _glyph_font() -> str:
+    """Segoe Fluent Icons (Win 11) / MDL2 (Win 10) for ✕; "" → a plain ✕."""
+    families = QFontDatabase.families()
+    return next((f for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets") if f in families), "")
+
+
 class Popover(QFrame):
-    """Floating panel; closes on click outside (Qt.Popup)."""
+    """Floating panel; closes on click outside (Qt.Popup) or with ✕ (12.9)."""
+
+    CLOSE = 20
 
     def __init__(self, title: str, parent=None):
         super().__init__(
@@ -829,9 +909,26 @@ class Popover(QFrame):
         self.body = QVBoxLayout(self.panel)
         self.body.setContentsMargins(theme.GAP2, 12, theme.GAP2, theme.GAP2)
         self.body.setSpacing(6)
+        # 12.9: title centred, ✕ on its line at the right (title colour, lighter on hover)
         header = dim_label(title)
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.body.addWidget(header)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        close = QPushButton("\uE8BB" if _glyph_font() else "✕")
+        close.setObjectName("PopoverClose")
+        close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setFixedSize(self.CLOSE, self.CLOSE)
+        if _glyph_font():
+            font = QFont(_glyph_font())
+            font.setPixelSize(12)
+            close.setFont(font)
+        close.clicked.connect(self.close)
+        row.addSpacing(self.CLOSE)                 # keeps the title in the middle
+        row.addWidget(header, 1)
+        row.addWidget(close, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.body.addLayout(row)
         self.body.addSpacing(10)
 
     def popup_over(self, widget: QWidget) -> None:

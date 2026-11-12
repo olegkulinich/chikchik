@@ -46,6 +46,15 @@ def is_backslash_key(event) -> bool:
     return ENABLED and event.nativeVirtualKey() == VK_OEM_5
 
 
+SCAN_SLASH = 0x35        # the physical / ? key (US position), whatever the layout
+
+
+def is_slash_key(event) -> bool:
+    """T50b: Ctrl+/ by the physical key. On a Russian layout that key types "." — its
+    virtual-key code follows the layout, the scan code doesn't (numpad / is 0x135)."""
+    return ENABLED and event.nativeScanCode() == SCAN_SLASH
+
+
 def message(event_type, message_ptr):
     """(msg id, hwnd, wParam, lParam) of a native Windows message, or None."""
     if not ENABLED or bytes(event_type) != b"windows_generic_MSG":

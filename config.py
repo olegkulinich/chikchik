@@ -20,6 +20,7 @@ DEFAULTS = {
     "last_format": "",       # T25: format of the last successful export
     "frames_mode": "0",      # T39: show frames instead of timecode
     "pin_on_top": "0",       # T45: window stays above others (remembered)
+    "loop": "0",             # T53: ∞ remembered between launches
 }
 
 
@@ -171,7 +172,7 @@ class Config(QObject):
         return ""
 
     # --- recent files (T40)
-    RECENT_KEPT = 6          # 5 shown + the open one
+    RECENT_KEPT = 11         # 10 shown + the open one (12.18)
 
     def recent(self) -> list[str]:
         value = self._store.value("window/recent", [])
