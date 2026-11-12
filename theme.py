@@ -170,6 +170,9 @@ QPushButton#TitleButton, QPushButton#TitleClose {{
 }}
 QPushButton#TitleButton:hover {{ background: {BUTTON_HOVER}; color: {TEXT}; }}
 QPushButton#TitleClose:hover {{ background: #C42B1C; color: #FFFFFF; }}
+QPushButton#PopoverClose {{ background: transparent; border: none; color: {DIM}; padding: 0;
+    min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; }}
+QPushButton#PopoverClose:hover {{ background: transparent; color: {TEXT}; }}
 QScrollArea#HotkeysScroll, QScrollArea#HotkeysScroll > QWidget > QWidget {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {BUTTON_HOVER}; border-radius: 3px; min-height: 24px; }}

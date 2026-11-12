@@ -867,7 +867,8 @@ def build_png_command(job: ExportJob) -> tuple[list[str], str]:
         *_input_args(job),
         "-map", f"0:{job.info.video_index}", "-an", "-sn",
         "-vf", ",".join(filters),
-        "-start_number", str(job.start_number),
+        *(["-start_number", str(job.start_number)] if "%" in job.final_output.name
+          else ["-frames:v", "1", "-update", "1"]),         # 12.21a: one frame, one file
         *(["-fps_mode", "passthrough"] if job.info.sequence is not None else []),
         "-f", "image2", "-y", str(job.final_output),
     ]

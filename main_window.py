@@ -595,7 +595,9 @@ class MainWindow(QMainWindow):
         transport.addWidget(self.play_button)
         self.loop_button = button("∞", checkable=True, tooltip="Loop (L)")    # T21
         self.loop_button.setFixedWidth(32)
-        self.loop_button.toggled.connect(lambda _on: self._update_loop())
+        self.loop_button.setChecked(self.config.flag("loop"))           # T53: remembered
+        self.loop_button.toggled.connect(lambda on: (self.config.set_flag("loop", on),
+                                                     self._update_loop()))
         transport.addWidget(self.loop_button)
         transport.addWidget(self.timeline, 1)
         transport.addWidget(self.time_field)
@@ -650,6 +652,12 @@ class MainWindow(QMainWindow):
         self.fps_field.committed.connect(self._fps_committed)
         self.fps_field.nudged.connect(self._nudge_fps)
         bottom.addWidget(self.fps_field)
+
+        # 12.24: Tab / Shift+Tab walk the fields left to right; ⌛ last
+        self._tab_fields = [self.in_field, self.out_field, self.d_field,
+                            *self.crop_fields.values(), self.fps_field, self.time_field]
+        for field in self._tab_fields:
+            field.tabbed.connect(lambda back, f=field: self._tab_from(f, back))
 
         self.scale_button = button(format_scale(self.scale),
                                    tooltip="Output scale (applied after crop)")
@@ -720,6 +728,15 @@ class MainWindow(QMainWindow):
             self._place_overlay()
         in_window = isinstance(obj, QWidget) and obj.window() is self
         if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
+                and event.modifiers() == Qt.KeyboardModifier.ControlModifier \
+                and win_frame.is_slash_key(event):
+            # T50b: Ctrl+/ by the physical key — on a Russian layout it types "." and Qt
+            # (matching by the character) never opened Hotkeys
+            if kind == QEvent.Type.KeyPress and not event.isAutoRepeat():
+                self.hotkeys_popover.popup_over(self.video)
+            event.accept()
+            return True
+        if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
                 and event.modifiers() & Qt.KeyboardModifier.ControlModifier \
                 and win_frame.is_backslash_key(event):
             # T27: by the physical key; ShortcutOverride is accepted so no other
@@ -784,7 +801,7 @@ class MainWindow(QMainWindow):
             "undo": self.undo,
             "redo": self.redo,
             "trim_in": lambda: self.set_in(self._position()),
-            "trim_out": lambda: self.set_out(self._position()),
+            "trim_out": lambda: self.set_out(self._position() + self._step(False)),
         }
         for action_id, value in SCALE_HOTKEYS.items():
             handlers[action_id] = lambda v=value: self.set_scale(v) if self._editable() else None
@@ -899,7 +916,7 @@ class MainWindow(QMainWindow):
         self.show_menu(event.globalPos())
 
     # ====================================================== recent (T40)
-    RECENT_SHOWN = 5
+    RECENT_SHOWN = 10
 
     def _recent(self) -> list[Path]:
         """Recent files, newest first, without the open one."""
@@ -1211,7 +1228,7 @@ class MainWindow(QMainWindow):
         if step:
             self._history_flush()
         self._enable_trim()
-        value = self._snap(value)
+        value = min(self.info.duration, self._snap(value))    # Out = boundary after its frame
         if value <= self.trim_in:
             self.trim_in = 0.0
         self.trim_out = value
@@ -1224,21 +1241,24 @@ class MainWindow(QMainWindow):
             return
         self._enable_trim()
         value = self._parse(text)
+        frame = self._step(False)
+        # Out is typed as its last frame (AE: In 0, Out 24 = 25 frames); inside, Out is
+        # the boundary after that frame
         other_ok = value is not None and (
-            value < self.trim_out if is_in else value > self.trim_in
+            value < self.trim_out if is_in else value > self.trim_in - frame / 2
         )
-        if value is None or value > self.info.duration or not other_ok:
+        if value is None or value > self.info.duration - frame / 2 or not other_ok:
             field.set_error(True)
             return
-        value = self._snap(value)
+        value = min(self.info.duration, self._snap(value))
         field.set_error(False)
         if is_in:
             self.trim_in = value
         else:
-            self.trim_out = value
+            self.trim_out = min(self.info.duration, value + frame)
         self._enable_trim()
         self._show_times()
-        self._show_at(value)
+        self._show_at(value if is_in else self._out_frame())
         self._history_commit()
 
     def _snap(self, t: float) -> float:
@@ -1266,10 +1286,28 @@ class MainWindow(QMainWindow):
             target = self.trim_in
         else:
             self.trim_out = max(self.trim_in + frame, min(self.trim_out + delta, self.info.duration))
-            target = self.trim_out
+            target = self._out_frame()
         self._enable_trim()
         self._show_times()
         self._show_at(target)
+
+    def _tab_from(self, field: Field, backward: bool) -> None:
+        """12.24: apply the field (as clicking elsewhere does), then edit the next one."""
+        fields = self._tab_fields
+        i = fields.index(field)
+        for _ in range(len(fields)):
+            i = (i + (-1 if backward else 1)) % len(fields)
+            nxt = fields[i]
+            if nxt.edit.isEnabled() and nxt.isVisible():
+                break
+        else:
+            return
+        field.edit.clearFocus()          # editingFinished → committed
+        nxt.edit.setFocus(Qt.FocusReason.TabFocusReason)
+
+    def _out_frame(self) -> float:
+        """The last frame inside the trim range (Out itself is the boundary after it)."""
+        return max(self.trim_in, self.trim_out - self._step(False))
 
     def _show_at(self, t: float) -> None:
         """Move the playhead/⌛ to t at once and seek there (mpv catches up)."""
@@ -1332,7 +1370,7 @@ class MainWindow(QMainWindow):
 
     def _show_times(self) -> None:
         self.in_field.setText(self._fmt(self.trim_in))
-        self.out_field.setText(self._fmt(self.trim_out))
+        self.out_field.setText(self._fmt(self._out_frame()))   # the last frame in (as AE)
         if self.info is not None:
             self.d_field.setText(self._fmt_length(self._trim_range()[1]))
         else:
@@ -1346,7 +1384,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------- Duration (T39)
     def _set_duration(self, length: float) -> None:
-        """D edits move Out; In stays. Length = what's exported (Out frame included)."""
+        """D edits move Out; In stays. Length = what's exported = Out − In (Out is the
+        boundary after the last frame; the Out field shows that last frame, as AE does)."""
         if not self._editable():
             return
         if not self.trim_button.isChecked():
@@ -1354,9 +1393,9 @@ class MainWindow(QMainWindow):
             self.trim_in = self._snap(self.timeline.position)    # D with Trim off: from the playhead
         frame = self._step(False)
         length = max(frame, length)
-        self.trim_out = self._snap(max(self.trim_in, min(self.info.duration, self.trim_in + length - frame)))
+        self.trim_out = min(self.info.duration, self._snap(self.trim_in + length))
         self._show_times()
-        self._show_at(self.trim_out)
+        self._show_at(self._out_frame())
 
     def _duration_committed(self, text: str) -> None:
         if self.info is None:
@@ -1425,7 +1464,7 @@ class MainWindow(QMainWindow):
         if self.info is None:
             return
         if self.trim_button.isChecked():
-            t = self.trim_in if start else self.trim_out
+            t = self.trim_in if start else self._out_frame()
         else:
             t = 0.0 if start else max(0.0, self.info.duration - self._step(False))
         t = self._snap(t)
@@ -1696,7 +1735,7 @@ class MainWindow(QMainWindow):
         fps = self.info.fps
         last = len(self.info.sequence.files) - 1
         self.trim_in = min(keep["in"], last) / fps
-        self.trim_out = min(keep["out"], last) / fps
+        self.trim_out = min(keep["out"], last + 1) / fps
         self._set_checked(self.trim_button, keep["trim"])
         self.crop = keep["crop"]
         self.video.set_crop(self.crop)
@@ -2022,7 +2061,8 @@ class MainWindow(QMainWindow):
         pos = self._central.mapFromGlobal(global_pos)
         held = bool(QApplication.mouseButtons())
         focus = QApplication.focusWidget()
-        popup = QApplication.activePopupWidget() is not None
+        popup = (QApplication.activePopupWidget() is not None
+                 or QApplication.activeModalWidget() is not None)   # menus; Settings/Hotkeys (9a)
         for reveal in (self._panels_reveal, self._title_reveal):
             if not reveal.active:
                 continue
@@ -2050,6 +2090,7 @@ class MainWindow(QMainWindow):
             return
         if (self._fullscreen and not self._cursor_hidden and not held
                 and not self._panels_reveal.shown and QApplication.activePopupWidget() is None
+                and QApplication.activeModalWidget() is None
                 and self.isActiveWindow()
                 and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
             QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
@@ -2250,7 +2291,10 @@ class MainWindow(QMainWindow):
         if self.info is None or self.worker is not None:
             return
         if self._kind() == "png":
-            self._export_png(ask)
+            if self._single_frame():
+                self._export_png_frame(ask)        # 12.21a: one file, no folder
+            else:
+                self._export_png(ask)
             return
         kind, suffix = self._kind(), self._suffix()
         default = self.source.with_name(f"{self._stem()}.cut{suffix}")
@@ -2286,12 +2330,13 @@ class MainWindow(QMainWindow):
         self._start_export(output.resolve())
 
     def _trim_range(self) -> tuple[float, float]:
-        """(start, duration). Trim off → the whole file; Out frame is included."""
+        """(start, duration). Trim off → the whole file; Out is the boundary after the
+        last exported frame (AE / Resolve), so the length is Out − In."""
         info = self.info
         if not self.trim_button.isChecked():
             return 0.0, info.duration
         start = self.trim_in
-        return start, min(self.trim_out - start + info.frame_duration, info.duration - start)
+        return start, max(info.frame_duration, min(self.trim_out, info.duration) - start)
 
     def _start_export(self, output: Path) -> None:
         info = self.info
@@ -2308,8 +2353,9 @@ class MainWindow(QMainWindow):
             if info.sequence is not None:              # T36: the In frame's own number
                 first, _count = sequence_range(info, start, duration)
                 start_number = info.sequence.numbers[first]
-            output.mkdir(parents=True, exist_ok=True)
-            output = png_pattern(output, self._stem(), self._last_frame_number())
+            if output.suffix.lower() != ".png":      # a folder for the sequence
+                output.mkdir(parents=True, exist_ok=True)
+                output = png_pattern(output, self._stem(), self._last_frame_number())
         try:
             job = ExportJob(
                 source=self.source, info=info,
@@ -2408,6 +2454,35 @@ class MainWindow(QMainWindow):
             folder = Path(chosen)
         self._start_export(folder)
 
+    def _single_frame(self) -> bool:
+        return round(self._trim_range()[1] / self._step(False)) <= 1
+
+    def _in_frame_number(self) -> int:
+        start = self._trim_range()[0]
+        if self.info.sequence is not None:          # T36: the frame's own number
+            first, _count = sequence_range(self.info, start, self._step(False))
+            return self.info.sequence.numbers[first]
+        return round(start * (self.info.fps or 0.0))
+
+    def _export_png_frame(self, ask: bool) -> None:
+        """12.21a: a single frame → name_0177.png next to the source (no name.cut folder);
+        Export to… asks for the file. Numbered like the sequence export (T19b)."""
+        digits = max(4, len(str(max(0, self._last_frame_number()))))
+        default = self.source.with_name(f"{self._stem()}_{self._in_frame_number():0{digits}d}.png")
+        if not ask:
+            self._start_export(unique_path(default))
+            return
+        filename, _ = QFileDialog.getSaveFileName(self, "Export frame", str(default), "PNG (*.png)")
+        if not filename:
+            return
+        output = Path(filename)
+        if output.suffix.lower() != ".png":
+            output = output.with_suffix(".png")
+        if same_path(output, self.source):
+            self._error("Export", "Choose another name — Export never replaces the source.")
+            return
+        self._start_export(output.resolve())
+
     @staticmethod
     def _png_frames(job: ExportJob) -> list[Path]:
         # No glob: names like "[VCB-Studio] …" contain [ ] — glob wildcards.
@@ -2420,6 +2495,18 @@ class MainWindow(QMainWindow):
             return []
 
     def _png_done(self, job: ExportJob, success: bool, error: str) -> None:
+        if "%" not in job.final_output.name:         # 12.21a: a single frame file
+            if success and job.final_output.exists():
+                self._toast_path = job.final_output
+                self.toast.show_message(f"Saved: {job.final_output.name}", action=True)
+                self.config.set("last_format", "png")
+                return
+            self._remove(job.final_output)
+            if error:
+                self._error("FFmpeg error", error)
+            else:
+                self.toast.show_message("Export cancelled", action=False, ms=3000)
+            return
         folder = job.final_output.parent
         self._drop_gap_frames(job)
         count = len(self._png_frames(job))

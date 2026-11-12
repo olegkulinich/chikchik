@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushBu
 
 import context_menu
 import theme
-from config import HOTKEY_ACTIONS, Config, display_key
+import win_frame
+from config import HOTKEY_ACTIONS, MENU_SHORTCUTS, Config, display_key
 from version import APP_NAME, BUILD, VERSION
 from widgets import CheckBox, Popover, Segmented, button, dim_label
 
@@ -19,6 +20,7 @@ class SettingsPopover(Popover):
 
     def __init__(self, config: Config, parent=None):
         super().__init__("Settings", parent)
+        self.toggle_keys = (MENU_SHORTCUTS["settings"][1],)          # 9a: Ctrl+K closes too
         self.config = config
         self._encoder_titles: list[QLabel] = []
         self._encoder_hints: list[QLabel] = []
@@ -212,6 +214,8 @@ class HotkeysPopover(Popover):
 
     def __init__(self, config: Config, parent=None):
         super().__init__("Hotkeys", parent)
+        self.toggle_keys = (MENU_SHORTCUTS["hotkeys"][1],)           # 9a: Ctrl+/ closes too
+        self.toggle_scan = win_frame.SCAN_SLASH if win_frame.ENABLED else None   # …on RU too
         self.config = config
 
         content = QWidget()
