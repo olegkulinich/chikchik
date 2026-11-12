@@ -1241,10 +1241,13 @@ class MainWindow(QMainWindow):
             return
         self._enable_trim()
         value = self._parse(text)
+        frame = self._step(False)
+        # Out is typed as its last frame (AE: In 0, Out 24 = 25 frames); inside, Out is
+        # the boundary after that frame
         other_ok = value is not None and (
-            value < self.trim_out if is_in else value > self.trim_in
+            value < self.trim_out if is_in else value > self.trim_in - frame / 2
         )
-        if value is None or value > self.info.duration + self._step(False) / 2 or not other_ok:
+        if value is None or value > self.info.duration - frame / 2 or not other_ok:
             field.set_error(True)
             return
         value = min(self.info.duration, self._snap(value))
@@ -1252,7 +1255,7 @@ class MainWindow(QMainWindow):
         if is_in:
             self.trim_in = value
         else:
-            self.trim_out = value               # the boundary after the last frame
+            self.trim_out = min(self.info.duration, value + frame)
         self._enable_trim()
         self._show_times()
         self._show_at(value if is_in else self._out_frame())
@@ -1367,7 +1370,7 @@ class MainWindow(QMainWindow):
 
     def _show_times(self) -> None:
         self.in_field.setText(self._fmt(self.trim_in))
-        self.out_field.setText(self._fmt(self.trim_out))
+        self.out_field.setText(self._fmt(self._out_frame()))   # the last frame in (as AE)
         if self.info is not None:
             self.d_field.setText(self._fmt_length(self._trim_range()[1]))
         else:
@@ -1382,7 +1385,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------- Duration (T39)
     def _set_duration(self, length: float) -> None:
         """D edits move Out; In stays. Length = what's exported = Out − In (Out is the
-        boundary after the last frame, as in AE / Resolve)."""
+        boundary after the last frame; the Out field shows that last frame, as AE does)."""
         if not self._editable():
             return
         if not self.trim_button.isChecked():
