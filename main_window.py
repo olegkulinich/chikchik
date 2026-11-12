@@ -2058,7 +2058,8 @@ class MainWindow(QMainWindow):
         pos = self._central.mapFromGlobal(global_pos)
         held = bool(QApplication.mouseButtons())
         focus = QApplication.focusWidget()
-        popup = QApplication.activePopupWidget() is not None
+        popup = (QApplication.activePopupWidget() is not None
+                 or QApplication.activeModalWidget() is not None)   # menus; Settings/Hotkeys (9a)
         for reveal in (self._panels_reveal, self._title_reveal):
             if not reveal.active:
                 continue
@@ -2086,6 +2087,7 @@ class MainWindow(QMainWindow):
             return
         if (self._fullscreen and not self._cursor_hidden and not held
                 and not self._panels_reveal.shown and QApplication.activePopupWidget() is None
+                and QApplication.activeModalWidget() is None
                 and self.isActiveWindow()
                 and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
             QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)

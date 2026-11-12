@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -889,17 +889,21 @@ def _glyph_font() -> str:
 
 
 class Popover(QFrame):
-    """Floating panel; closes on click outside (Qt.Popup) or with ✕ (12.9)."""
+    """Floating panel (Settings, Hotkeys). 9a: modal — a click outside doesn't close
+    it (only menus close that way); ✕, Esc or its own hotkey (`toggle_keys`) do."""
 
     CLOSE = 20
+    toggle_keys: tuple[str, ...] = ()       # e.g. ("Ctrl+K",) — the key that opened it
+    toggle_scan: int | None = None          # physical key (scan code) with Ctrl, e.g. /
 
     def __init__(self, title: str, parent=None):
         super().__init__(
             parent,
-            Qt.WindowType.Popup
+            Qt.WindowType.Dialog
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.NoDropShadowWindowHint,
         )
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -930,6 +934,19 @@ class Popover(QFrame):
         row.addWidget(close, 0, Qt.AlignmentFlag.AlignVCenter)
         self.body.addLayout(row)
         self.body.addSpacing(10)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        combo = QKeySequence(event.keyCombination()).toString(
+            QKeySequence.SequenceFormat.PortableText)
+        toggle = combo in self.toggle_keys or (
+            self.toggle_scan is not None
+            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
+            and event.nativeScanCode() == self.toggle_scan)
+        if (event.key() == Qt.Key.Key_Escape and event.modifiers() == Qt.KeyboardModifier.NoModifier) \
+                or toggle:
+            self.close()
+            return
+        super().keyPressEvent(event)
 
     def popup_over(self, widget: QWidget) -> None:
         self.adjustSize()
