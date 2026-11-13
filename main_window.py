@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 import perf_log
+import startup_log
 from version import APP_NAME
 import theme
 import win_frame
@@ -968,13 +969,20 @@ class MainWindow(QMainWindow):
         path = path.expanduser().resolve()
         try:
             if is_image(path):                                   # T36: a frame → sequence
-                info = probe_sequence(find_sequence(path))
+                sequence = find_sequence(path)
+                startup_log.mark(f"sequence found: {len(sequence.files)} frames")
+                info = probe_sequence(sequence)
+                startup_log.mark("ffprobe done (sequence)")
             else:
+                startup_log.mark("ffprobe start")
                 info = probe_media(path)
+                startup_log.mark("ffprobe done")
         except Exception as exc:
+            startup_log.finish(f"open failed: {exc}")
             self._error("Could not open video", str(exc))
             return
         self._open_info(path, info)
+        startup_log.mark("UI filled for the file")
 
     def _open_info(self, path: Path, info: MediaInfo, keep: dict | None = None) -> None:
         """Load a probed file or sequence. `keep` (T36 fps change) restores trim, crop and

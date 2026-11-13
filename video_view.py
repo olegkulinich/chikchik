@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QOpenGLContext, QPainter, QPainterPath, QPen
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 import perf_log
+import startup_log
 import theme
 
 
@@ -49,7 +50,9 @@ class VideoView(QOpenGLWidget):
         )
         if os.environ.get("QTC_SAFE_GL"):     # software GL in tests
             options.update(gpu_dumb_mode="yes", hwdec="no")
+        startup_log.mark("mpv module imported")
         self.player = mpv.MPV(**options)
+        startup_log.mark("mpv core created")
         self._mpv = mpv
         self._render = None
         self._get_proc = None
@@ -106,8 +109,26 @@ class VideoView(QOpenGLWidget):
             opengl_init_params={"get_proc_address": self._get_proc},
         )
         self._render.update_cb = self._frame_ready.emit
+        startup_log.mark("GL: mpv render context ready")
+        if startup_log.ENABLED:
+            self.frameSwapped.connect(self._startup_swapped)
+
+    def _startup_swapped(self) -> None:
+        """T55a: the first swap after mpv drew a real video frame ends the startup log."""
+        startup_log.mark("first swap", once=True)
+        if self._startup_video_painted:
+            startup_log.finish("first video frame on screen (swapped)")
+            self.frameSwapped.disconnect(self._startup_swapped)
+
+    _startup_restart = False        # T55a: mpv reported playback-restart (a frame is ready)
+    _startup_video_painted = False
 
     def paintGL(self) -> None:
+        if startup_log.ENABLED:
+            startup_log.mark("first paintGL", once=True)
+            if self._startup_restart and not self._startup_video_painted:
+                self._startup_video_painted = True
+                startup_log.mark("first paintGL with a decoded frame")
         ratio = self.devicePixelRatioF()
         painter = QPainter(self)
         if self._render is not None:
@@ -327,7 +348,18 @@ class VideoView(QOpenGLWidget):
 
     def _on_event(self, event) -> None:                    # mpv event thread
         try:
-            if event.event_id.value == self._mpv.MpvEventID.PLAYBACK_RESTART:
+            event_id = event.event_id.value
+            if startup_log.ENABLED:
+                names = {self._mpv.MpvEventID.START_FILE: "mpv: start-file",
+                         self._mpv.MpvEventID.FILE_LOADED: "mpv: file-loaded",
+                         self._mpv.MpvEventID.VIDEO_RECONFIG: "mpv: video-reconfig",
+                         self._mpv.MpvEventID.PLAYBACK_RESTART: "mpv: playback-restart"}
+                if event_id in names:
+                    startup_log.mark(names[event_id], once=True)
+                if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
+                    self._startup_restart = True
+                    self._frame_ready.emit()
+            if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                 self._seek_done.emit()
         except Exception:
             pass
@@ -357,6 +389,7 @@ class VideoView(QOpenGLWidget):
         # T36: transparency on a checkerboard (export decides the rest)
         self._set_option("alpha", "blend-tiles")    # mpv ≤ 0.37
         self._set_option("background", "tiles")     # mpv ≥ 0.38
+        startup_log.mark("mpv: loadfile sent", once=True)
         self.player.command("loadfile", str(path), "replace")
         self.set_audio(aid)
         self.set_subtitle(sid)

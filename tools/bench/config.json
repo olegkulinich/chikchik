@@ -1,0 +1,63 @@
+{
+  "runs": 5,
+  "timeout_s": 12,
+  "players": {
+    "ChikChik": {
+      "exe": "C:\\Users\\super\\AppData\\Local\\Programs\\ChikChik\\ChikChik.exe",
+      "args": [],
+      "sequence": true
+    },
+    "MPC-BE": {
+      "exe": "C:\\Program Files\\MPC-BE\\mpc-be64.exe",
+      "args": ["/new"],
+      "sequence": false
+    },
+    "VLC": {
+      "exe": "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
+      "args": ["--no-one-instance", "--qt-continue=0"],
+      "sequence": false
+    },
+    "DJV": {
+      "exe": "C:\\Program Files\\DJV 3.4.2\\bin\\djv.exe",
+      "args": [],
+      "sequence": true
+    },
+    "Chaos Player": {
+      "exe": "C:\\Program Files\\Chaos Group\\Chaos Player\\chaosplayer_qt5.exe",
+      "args": [],
+      "sequence": true
+    }
+  },
+  "files": [
+    "G:\\Dev\\test footage\\2sec_2160x2160.mov",
+    "G:\\Dev\\test footage\\20sec_1080x1920.mp4",
+    "G:\\Dev\\test footage\\30sec_1920x1080.mov",
+    "G:\\Dev\\test footage\\25min_1920x1080.mkv",
+    "G:\\Dev\\test footage\\3hr_3840x2160.mkv",
+    "G:\\Dev\\test footage\\30sec_1920x1080.cut"
+  ],
+  "stress": {
+    "file": "G:\\Dev\\test footage\\30sec_1920x1080.mov",
+    "minutes": 90,
+    "players": {
+      "ChikChik": {
+        "play": "Space",
+        "frame_next": "Right",
+        "frame_prev": "Left",
+        "jump_back": "Shift+Left",
+        "jump_back_times": 8,
+        "scrub_from_bottom_px": 68,
+        "scrub_x": [0.30, 0.65]
+      },
+      "MPC-BE": {
+        "play": "Space",
+        "frame_next": "Ctrl+Right",
+        "frame_prev": "Ctrl+Left",
+        "jump_back": "Left",
+        "jump_back_times": 10,
+        "scrub_from_bottom_px": null,
+        "scrub_x": [0.30, 0.65]
+      }
+    }
+  }
+}
