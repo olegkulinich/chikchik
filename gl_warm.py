@@ -6,9 +6,10 @@ the driver's ICD here, in parallel with the imports, may take some of that off t
 thread. Invisible: the window is 1×1, never shown, destroyed in the same thread.
 
 Hidden switch QTC_GL_WARM (Windows only):
-  0 / unset — off (as before)
+  0 — off
   1 — load opengl32.dll + pick a pixel format on a hidden window (loads the driver ICD)
-  2 — 1 + create a dummy GL context, make it current, read GL_RENDERER, delete it
+  2 / unset — 1 + create a dummy GL context, make it current, read GL_RENDERER, delete it
+    (default since E2 build 2 bench: native window ~290 → ~195 ms; level 1 ~220)
 
 No Qt imports: app.py starts this before PySide6.
 """
@@ -21,7 +22,7 @@ import threading
 import startup_log
 
 _value = os.environ.get("QTC_GL_WARM", "").strip()
-LEVEL = int(_value) if _value.isdigit() else 0
+LEVEL = int(_value) if _value.isdigit() else 2
 
 
 def _warm(level: int) -> None:

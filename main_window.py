@@ -621,9 +621,10 @@ class MainWindow(QMainWindow):
         startup_log.mark("UI: transport · Timeline")
         self.time_field = Field("⌛", 110)   # emoji, like the app icon
         startup_log.mark("UI: transport · ⌛ Field")
-        if os.environ.get("QTC_SYMBOL_FONT", "") not in ("", "0"):
+        if os.environ.get("QTC_SYMBOL_FONT", "") != "0":
             # E2 build 2 (C): name the emoji font instead of letting Qt search for a
-            # fallback that has ⌛ (same color glyph on Windows).
+            # fallback that has ⌛ (same color glyph on Windows). The search cost
+            # ~130–160 ms of startup on the user's PC; QTC_SYMBOL_FONT=0 → old way.
             self.time_field.prefix.setStyleSheet(f'font-family: "{theme.EMOJI_FAMILY}";')
         if startup_log.ENABLED:          # glyph fallback cost shows here, not at first paint
             self.time_field.prefix.ensurePolished()     # the stylesheet font, as painted
