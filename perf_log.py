@@ -28,3 +28,30 @@ def log(text: str) -> None:
         _file.write(f"{time.perf_counter() * 1000:12.1f}  {text}\n")
     except OSError:
         pass
+
+
+class _Log:
+    """Same format as the scrub log, for other hidden diagnostics."""
+
+    def __init__(self, env: str, filename: str):
+        value = os.environ.get(env, "").strip()
+        self.enabled = bool(value) and value != "0"
+        self.path = (Path(value) if self.enabled and value not in ("1", "yes", "true")
+                     else Path(tempfile.gettempdir()) / filename)
+        self._file = None
+
+    def log(self, text: str) -> None:
+        if not self.enabled:
+            return
+        try:
+            if self._file is None:
+                self._file = open(self.path, "a", encoding="utf-8", buffering=1)
+                self._file.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            self._file.write(f"{time.perf_counter() * 1000:12.1f}  {text}\n")
+        except OSError:
+            pass
+
+
+# E2 (55g): QTC_RESUME_LOG=1 → %TEMP%\ChikChik-resume.log — Space → mpv unpaused →
+# first new frame from mpv → painted → on screen, one line per resume.
+resume = _Log("QTC_RESUME_LOG", "ChikChik-resume.log")

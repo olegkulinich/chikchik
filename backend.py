@@ -1038,3 +1038,34 @@ class ExportWorker(QThread):
             details = "\n".join(log_lines[-25:])
             return False, details or f"FFmpeg exited with code {return_code}"
         return True, ""
+
+
+class Probe:
+    """E2 (55c): ffprobe in a background thread, started before the window is built.
+
+    `result()` waits for it (normally already finished) and re-raises its error."""
+
+    def __init__(self, path: Path):
+        import threading
+
+        self.path = path.expanduser().resolve()
+        self._info: MediaInfo | None = None
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, name="ffprobe", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            if is_image(self.path):
+                self._info = probe_sequence(find_sequence(self.path))
+            else:
+                self._info = probe_media(self.path)
+        except BaseException as exc:      # handed to the GUI thread in result()
+            self._error = exc
+
+    def result(self) -> MediaInfo:
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        assert self._info is not None
+        return self._info

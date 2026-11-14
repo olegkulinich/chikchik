@@ -448,9 +448,14 @@ def _sizing_log(line: str) -> None:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, preload: Path | None = None):
         super().__init__()
+        startup_log.mark("MainWindow: QMainWindow base")
         self.config = Config(self)
+        startup_log.mark("MainWindow: config")
+        # E2 (55b'): file given on the command line → mpv starts loading it as soon as its
+        # core exists, while the rest of the UI is still being built.
+        self._preload = preload
         self.source: Path | None = None
         self.info: MediaInfo | None = None
         self.audio: AudioTrack | None = None
@@ -497,6 +502,7 @@ class MainWindow(QMainWindow):
         self._drag_offset = QPoint()
 
         self._build_ui()
+        startup_log.mark("MainWindow: _build_ui done")
         # T22, Windows: an OpenGL window covering the whole monitor gets a DWM mode in
         # which menus and dialogs open *behind* it. Qt's own fix — a 1 px border in
         # fullscreen — is read from this property when the native window is created.
@@ -505,13 +511,17 @@ class MainWindow(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
         if self.windowHandle() is not None:
             self.windowHandle().setProperty("_q_has_border_in_fullscreen", True)
-        self.settings_popover = SettingsPopover(self.config, self)
-        self.hotkeys_popover = HotkeysPopover(self.config, self)
+        startup_log.mark("MainWindow: native window tagged")
+        # E2: Settings / Hotkeys are built on first open (see the properties below)
+        self._settings_popover: SettingsPopover | None = None
+        self._hotkeys_popover: HotkeysPopover | None = None
         self._install_menu_actions()
         self._install_hotkeys()
+        startup_log.mark("MainWindow: menu actions + hotkeys")
         self.config.hotkeys_changed.connect(self._install_hotkeys)
         self.config.changed.connect(self._config_changed)                 # T42
         self._config_changed()
+        startup_log.mark("MainWindow: config applied")
 
         # T1: a press anywhere outside the field being edited applies it and leaves it.
         QApplication.instance().installEventFilter(self)
@@ -539,13 +549,29 @@ class MainWindow(QMainWindow):
 
         self._update_enabled()
         self._ui_ready = True
+        startup_log.mark("MainWindow: timers, enabled state")
         self.resize(1100, 720)
         if self.config.geometry() is not None:
             self.restoreGeometry(self.config.geometry())
             if self.windowState() & Qt.WindowState.WindowFullScreen:   # never start fullscreen
                 self.setWindowState(self.windowState() & ~Qt.WindowState.WindowFullScreen)
+        startup_log.mark("MainWindow: geometry restored")
         theme.dark_title_bar(self)
+        startup_log.mark("MainWindow: dark title bar")
         self._apply_layout()                     # T27: the remembered UI mode
+        startup_log.mark("MainWindow: layout applied")
+
+    @property
+    def settings_popover(self) -> SettingsPopover:
+        if self._settings_popover is None:
+            self._settings_popover = SettingsPopover(self.config, self)
+        return self._settings_popover
+
+    @property
+    def hotkeys_popover(self) -> HotkeysPopover:
+        if self._hotkeys_popover is None:
+            self._hotkeys_popover = HotkeysPopover(self.config, self)
+        return self._hotkeys_popover
 
     # ================================================================ UI
     def _build_ui(self) -> None:
@@ -555,6 +581,9 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
 
         self.video = VideoView()
+        startup_log.mark("UI: VideoView (mpv core)")
+        if self._preload is not None:
+            self.video.preload(self._preload, autoplay=self.config.flag("autoplay"))
         central.video = self.video
         self.video.crop_drawn.connect(self._crop_drawn)
         self.video.menu_requested.connect(self.show_menu)
@@ -603,6 +632,7 @@ class MainWindow(QMainWindow):
         transport.addWidget(self.timeline, 1)
         transport.addWidget(self.time_field)
         panels_layout.addWidget(self.transport_bar)
+        startup_log.mark("UI: transport row")
 
         self.bottom_bar = QWidget()
         bottom = QHBoxLayout(self.bottom_bar)
@@ -671,12 +701,14 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.export_button)
         panels_layout.addWidget(self.bottom_bar)
         root.addWidget(self.panels)
+        startup_log.mark("UI: bottom row")
 
         for field in (self.time_field, self.in_field, self.out_field, self.d_field, self.fps_field,
                       *self.crop_fields.values()):
             field.left.connect(lambda: self.video.setFocus())
 
         self.setCentralWidget(central)
+        startup_log.mark("UI: central widget set")
         central.toast_anchor = lambda: self.video.geometry()
         self.toast = Toast(central)
         self.toast.action_clicked.connect(self._show_in_folder)
@@ -693,6 +725,7 @@ class MainWindow(QMainWindow):
         self._show_times()
         self._show_crop()
         self._show_fps()
+        startup_log.mark("UI: toast, title strip, values")
 
     def _install_menu_actions(self) -> None:
         handlers = {
@@ -963,12 +996,16 @@ class MainWindow(QMainWindow):
         if filename:
             self.open_path(Path(filename))
 
-    def open_path(self, path: Path) -> None:
+    def open_path(self, path: Path, probe=None) -> None:
+        """`probe` (E2, 55c): an ffprobe already running in a thread (`backend.Probe`)."""
         if self.worker is not None:
             return
         path = path.expanduser().resolve()
         try:
-            if is_image(path):                                   # T36: a frame → sequence
+            if probe is not None:
+                info = probe.result()
+                startup_log.mark("ffprobe result taken (thread)")
+            elif is_image(path):                                   # T36: a frame → sequence
                 sequence = find_sequence(path)
                 startup_log.mark(f"sequence found: {len(sequence.files)} frames")
                 info = probe_sequence(sequence)
@@ -979,6 +1016,7 @@ class MainWindow(QMainWindow):
                 startup_log.mark("ffprobe done")
         except Exception as exc:
             startup_log.finish(f"open failed: {exc}")
+            self.video.cancel_preload()                          # E2: it would keep playing
             self._error("Could not open video", str(exc))
             return
         self._open_info(path, info)

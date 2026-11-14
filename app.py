@@ -46,6 +46,21 @@ def main() -> int:
     prepare_mpv_dll()
     startup_log.mark("mpv dll path ready")
 
+    # ChikChik.exe [--gif] [video]   (--gif: "Trim / Crop → GIF" context menu item)
+    args = [a for a in sys.argv[1:] if a.strip()]
+    gif = "--gif" in args
+    paths = [a for a in args if a != "--gif"]
+    # E2 (55c): ffprobe runs in a thread while Qt and the window start up.
+    probe = None
+    preload = None
+    if paths:
+        from backend import Probe, is_image
+
+        probe = Probe(Path(paths[0]))
+        startup_log.mark("ffprobe thread started")
+        if not is_image(probe.path):          # sequences need the probe for their frame list
+            preload = probe.path
+
     fmt = QSurfaceFormat.defaultFormat()
     fmt.setSwapInterval(1)
     QSurfaceFormat.setDefaultFormat(fmt)
@@ -86,7 +101,7 @@ def main() -> int:
         from main_window import MainWindow
 
         startup_log.mark("main_window imported")
-        window = MainWindow()
+        window = MainWindow(preload=preload)
         startup_log.mark("MainWindow created")
     except Exception as exc:
         QMessageBox.critical(
@@ -96,10 +111,6 @@ def main() -> int:
         )
         return 1
 
-    # ChikChik.exe [--gif] [video]   (--gif: "Trim / Crop → GIF" context menu item)
-    args = [a for a in sys.argv[1:] if a.strip()]
-    gif = "--gif" in args
-    paths = [a for a in args if a != "--gif"]
     # T38: show the window only after its first frame is drawn (no light flash).
     theme.cloak(window, True)
     uncloaked = False
@@ -123,7 +134,7 @@ def main() -> int:
     window.show()
     startup_log.mark("window.show()")
     if paths:
-        window.open_path(Path(paths[0]))
+        window.open_path(Path(paths[0]), probe=probe)
         startup_log.mark("open_path returned")
     if gif:          # after open_path: it sets the default format (T25)
         window.set_format("gif")
