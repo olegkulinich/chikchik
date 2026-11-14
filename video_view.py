@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QOpenGLContext, QPainter, QPainterPath, QPen
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
@@ -15,12 +15,21 @@ import startup_log
 import theme
 
 
+def _silence_minutes() -> float:
+    """E3 (T93): minutes of pause with the audio device kept awake (QTC_SILENCE_MIN)."""
+    try:
+        return max(0.05, float(os.environ.get("QTC_SILENCE_MIN", "") or 10))
+    except ValueError:
+        return 10.0
+
+
 class VideoView(QOpenGLWidget):
     crop_drawn = Signal(QRect)         # new crop rect in frame pixels (drag draws, click doesn't)
     menu_requested = Signal(QPoint)    # global position
     _frame_ready = Signal()
     _seek_done = Signal()              # from mpv's event thread → GUI thread
     _display_changed = Signal()        # dwidth/dheight arrived → re-apply zoom
+    _pause_changed = Signal(bool)      # E3 (T93): mpv's pause → GUI thread
 
     # Read from a cache filled by mpv's event thread: a synchronous property read
     # waits for the mpv core, which is busy for the whole seek (~200 ms on long
@@ -60,6 +69,15 @@ class VideoView(QOpenGLWidget):
             name, _, value = item.partition("=")
             if name:
                 options[name.strip().replace("-", "_")] = value.strip() or "yes"
+        # E3 (T93): the silence keeps a SYSTEM power request (blocks automatic sleep), so
+        # it is fed only for the first QTC_SILENCE_MIN minutes of a pause (default 10).
+        self._silence = str(options.get("audio_stream_silence", "no")) == "yes"
+        self._silence_off = False
+        self._silence_timer = QTimer(self)
+        self._silence_timer.setSingleShot(True)
+        self._silence_timer.setInterval(int(_silence_minutes() * 60_000))
+        self._silence_timer.timeout.connect(self._silence_sleep)
+        self._pause_changed.connect(self._on_pause_changed, Qt.ConnectionType.QueuedConnection)
         perf_log.resume.log(f"mpv options: {options}")
         startup_log.mark("mpv module imported")
         # E2 build 2 (E): the options of this run, so a bench with QTC_MPV_OPTS is provable
@@ -152,8 +170,8 @@ class VideoView(QOpenGLWidget):
             self._resume_t0 = None
 
     def _safe_get(self, name: str):
-        try:
-            return self.player[name]
+        try:                 # player[name] reads options/<name>: no current-ao there
+            return getattr(self.player, name.replace("-", "_"))
         except Exception:
             return "?"
 
@@ -386,6 +404,8 @@ class VideoView(QOpenGLWidget):
         self._state[name] = value
         if name == "time-pos" and perf_log.ENABLED and value is not None and self.frame_duration_s:
             perf_log.log(f"shown  frame {round(value / self.frame_duration_s)}")
+        if name == "pause":
+            self._pause_changed.emit(bool(value))
         if name == "pause" and value:
             self._stepping_until = 0.0                     # the step is over
         if name == "pause" and not value and self._resume_t0 is not None:
@@ -461,6 +481,8 @@ class VideoView(QOpenGLWidget):
         self._in_flight = self._pending = None
         paused = not autoplay        # T35: off → the first frame, paused
         self._state.update({"time-pos": None, "eof-reached": False, "pause": paused})
+        self._silence_timer.stop()
+        self._wake_audio()           # T93: a new file starts with the silence back on
         # E2 build 2 (2.2): all async, in order — a synchronous property set waits while
         # the mpv core opens the (preloaded) file and froze the UI for ~200 ms.
         self._set("pause", paused)   # before loadfile: mpv shows frame 1 and waits
@@ -607,7 +629,37 @@ class VideoView(QOpenGLWidget):
             else:
                 self._resume_t0 = None
         self._state["pause"] = paused          # optimistic: the play button reacts at once
+        if not paused:
+            self._wake_audio()                 # T93: before pause=no, commands go in order
         self._command("set", "pause", "yes" if paused else "no")
+
+    # E3 (T93): audio-stream-silence only takes effect when mpv opens the audio output,
+    # so switching it means `ao-reload` (keeps the frame: mpv does a refresh seek).
+    def _on_pause_changed(self, paused: bool) -> None:
+        if not self._silence:
+            return
+        if paused:
+            if not self._silence_off and not self._silence_timer.isActive():
+                self._silence_timer.start()
+        else:
+            self._silence_timer.stop()
+            self._wake_audio()                 # unpaused some other way (late but safe)
+
+    def _silence_sleep(self) -> None:
+        if not self._state.get("pause") or self._silence_off:
+            return
+        self._silence_off = True
+        perf_log.resume.log("T93: long pause → audio-stream-silence=no + ao-reload")
+        self._command("set", "audio-stream-silence", "no")
+        self._command("ao-reload")
+
+    def _wake_audio(self) -> None:
+        if not self._silence_off:
+            return
+        self._silence_off = False
+        perf_log.resume.log("T93: play after long pause → audio-stream-silence=yes + ao-reload")
+        self._command("set", "audio-stream-silence", "yes")
+        self._command("ao-reload")
 
     def toggle_pause(self) -> None:
         if not self.has_video:

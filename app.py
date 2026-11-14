@@ -7,8 +7,10 @@ import os
 import sys
 from pathlib import Path
 
+import placeholder  # noqa: I001 — E3 (B): first window of the process (sets DPI awareness)
 import gl_warm  # noqa: I001 — E2 (A): before PySide6, so the warm-up overlaps the imports
 
+placeholder.start(sys.argv)
 gl_warm.start()
 if startup_log.ENABLED:          # which hidden switches this run had (bench variants)
     _switches = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
@@ -123,21 +125,27 @@ def main() -> int:
     theme.cloak(window, True)
     uncloaked = False
 
-    def uncloak() -> None:
+    flush = os.environ.get("QTC_UNCLOAK_FLUSH") == "1"     # E3 (T91) experiment, default off
+
+    def uncloak(source: str = "first frame swapped") -> None:
         nonlocal uncloaked
         if not uncloaked:
             uncloaked = True
+            if flush:      # T91: wait until DWM has composed the swapped frame (≤ 1 vsync)
+                theme.dwm_flush()
+                startup_log.mark("DwmFlush before uncloak")
             theme.cloak(window, False)
-            startup_log.mark("window uncloaked (first frame swapped)")
+            startup_log.mark(f"window uncloaked ({source})")
+            QTimer.singleShot(150, placeholder.close)   # E3 (B): real window is above it now
             if not paths:
                 startup_log.finish("done: no file")
 
     def uncloak_timer() -> None:
         if not uncloaked:
             startup_log.mark("uncloak by 1 s safety timer (no frame yet)")
-        uncloak()
+        uncloak("1 s safety timer")
 
-    window.video.frameSwapped.connect(uncloak)
+    window.video.frameSwapped.connect(lambda: uncloak())
     QTimer.singleShot(1000, uncloak_timer)    # safety net if no frame arrives
     window.show()
     startup_log.mark("window.show()")

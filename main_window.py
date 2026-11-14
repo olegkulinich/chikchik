@@ -2615,8 +2615,10 @@ class MainWindow(QMainWindow):
         background (FFmpeg), the UI stays responsive."""
         if self.info is None or self._frame_process is not None:
             return
-        # mpv reports the frame's start; half a frame back keeps FFmpeg on the same frame.
-        time_pos = max(0.0, self._position() - self.info.frame_duration / 2)
+        # mpv reports the frame's start; a quarter frame back keeps FFmpeg on the same
+        # frame (T92: half a frame sits exactly on the rounding edge of a 1/60 time base —
+        # 60 fps OBS .mp4 gave the previous frame on every third frame). Same as export.
+        time_pos = max(0.0, self._position() - self.info.frame_duration / 4)
         command = build_frame_command(self.source, self.info, time_pos,
                                       self._effective_crop(exact=True), self.scale)
         process = QProcess(self)
@@ -2717,6 +2719,11 @@ class MainWindow(QMainWindow):
             self.config.set_geometry(self._window_geometry)   # T22: fullscreen isn't remembered
         else:
             self.config.set_geometry(self.saveGeometry())
+        if sys.platform == "win32":          # E3 (B): where the placeholder goes next time
+            import placeholder
+
+            value = None if self._fullscreen else placeholder.save_value(self.winId())
+            self.config.set_placeholder(f"{value},{self._ui_mode}" if value else "")
         self.poll.stop()
         self.video.shutdown()
         event.accept()
