@@ -47,6 +47,10 @@ class VideoView(QOpenGLWidget):
             input_vo_keyboard=False,
             osd_level=0,
             sid="no",                     # subtitles off unless picked in the menu
+            # E2: keep the audio device fed with silence while paused — after a pause
+            # longer than ~10–15 s Windows let it sleep, and play started with a jump +
+            # stall while it woke up (user test 2026-11-14: gone with this option).
+            audio_stream_silence="yes",
         )
         if os.environ.get("QTC_SAFE_GL"):     # software GL in tests
             options.update(gpu_dumb_mode="yes", hwdec="no")
