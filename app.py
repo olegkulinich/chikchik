@@ -7,6 +7,14 @@ import os
 import sys
 from pathlib import Path
 
+import gl_warm  # noqa: I001 — E2 (A): before PySide6, so the warm-up overlaps the imports
+
+gl_warm.start()
+if startup_log.ENABLED:          # which hidden switches this run had (bench variants)
+    _switches = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
+                         if k.startswith("QTC_") and k != "QTC_STARTUP_LOG")
+    startup_log.mark(f"env: {_switches or '-'}")
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -45,6 +53,21 @@ def prepare_mpv_dll() -> None:
 def main() -> int:
     prepare_mpv_dll()
     startup_log.mark("mpv dll path ready")
+
+    # ChikChik.exe [--gif] [video]   (--gif: "Trim / Crop → GIF" context menu item)
+    args = [a for a in sys.argv[1:] if a.strip()]
+    gif = "--gif" in args
+    paths = [a for a in args if a != "--gif"]
+    # E2 (55c): ffprobe runs in a thread while Qt and the window start up.
+    probe = None
+    preload = None
+    if paths:
+        from backend import Probe, is_image
+
+        probe = Probe(Path(paths[0]))
+        startup_log.mark("ffprobe thread started")
+        if not is_image(probe.path):          # sequences need the probe for their frame list
+            preload = probe.path
 
     fmt = QSurfaceFormat.defaultFormat()
     fmt.setSwapInterval(1)
@@ -86,7 +109,7 @@ def main() -> int:
         from main_window import MainWindow
 
         startup_log.mark("main_window imported")
-        window = MainWindow()
+        window = MainWindow(preload=preload)
         startup_log.mark("MainWindow created")
     except Exception as exc:
         QMessageBox.critical(
@@ -96,10 +119,6 @@ def main() -> int:
         )
         return 1
 
-    # ChikChik.exe [--gif] [video]   (--gif: "Trim / Crop → GIF" context menu item)
-    args = [a for a in sys.argv[1:] if a.strip()]
-    gif = "--gif" in args
-    paths = [a for a in args if a != "--gif"]
     # T38: show the window only after its first frame is drawn (no light flash).
     theme.cloak(window, True)
     uncloaked = False
@@ -123,7 +142,7 @@ def main() -> int:
     window.show()
     startup_log.mark("window.show()")
     if paths:
-        window.open_path(Path(paths[0]))
+        window.open_path(Path(paths[0]), probe=probe)
         startup_log.mark("open_path returned")
     if gif:          # after open_path: it sets the default format (T25)
         window.set_format("gif")

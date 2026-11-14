@@ -14,6 +14,10 @@ ChikChik also writes its own stage log (QTC_STARTUP_LOG) — matched by process 
 Results: results\\startup_<date>\\  summary.txt, runs.csv, chikchik_stages.csv,
 first-frame screenshots of the first measured run in frames\\, DONE.txt.
 
+Variants (E2): `bench.bat chikchik "--env=QTC_GL_WARM=0" "--env=QTC_GL_WARM=2"` runs
+ChikChik once per --env (space-separated NAME=value pairs), interleaved like players;
+each variant gets its own rows and its own stage table.
+
 Safety: mouse in the top-left corner pauses, Ctrl+Alt+Q stops (summary still written).
 """
 from __future__ import annotations
@@ -157,7 +161,9 @@ def fmt(values: list[float]) -> str:
 def main() -> int:
     config = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
     runs, timeout = int(config.get("runs", 5)), float(config.get("timeout_s", 12))
-    only = [a.lower() for a in sys.argv[1:]]          # optional: player names to run
+    only = [a.lower() for a in sys.argv[1:] if not a.startswith("--env=")]  # player names
+    variants = [dict(pair.split("=", 1) for pair in a[len("--env="):].split() if "=" in pair)
+                for a in sys.argv[1:] if a.startswith("--env=")]
 
     players = {}
     for name, item in config["players"].items():
@@ -167,7 +173,12 @@ def main() -> int:
         if not exe.exists():
             print(f"skip {name}: not found {exe}")
             continue
-        players[name] = (exe, item.get("args", []), item.get("sequence", False))
+        if name == "ChikChik" and variants:
+            for env in variants:
+                label = "ChikChik " + (" ".join(f"{k}={v}" for k, v in env.items()) or "-")
+                players[label] = (exe, item.get("args", []), item.get("sequence", False), env)
+        else:
+            players[name] = (exe, item.get("args", []), item.get("sequence", False), {})
     files = []
     for raw in config["files"]:
         path = Path(raw)
@@ -176,7 +187,7 @@ def main() -> int:
             continue
         files.append((path, target_path(path)))
 
-    busy = {name: w.running_instances(exe) for name, (exe, _, _) in players.items()}
+    busy = {name: w.running_instances(exe) for name, (exe, *_) in players.items()}
     busy = {k: v for k, v in busy.items() if v}
     if busy:
         text = "Close these players first:\n" + "\n".join(busy)
@@ -184,7 +195,7 @@ def main() -> int:
         w.message("Startup bench", text, warning=True)
         return 1
 
-    pairs = [(name, src, target) for name, (_, _, seq) in players.items()
+    pairs = [(name, src, target) for name, (_, _, seq, _) in players.items()
              for src, target in files if seq or not is_sequence(src)]
     out = HERE / "results" / f"startup_{datetime.now():%Y%m%d_%H%M}"
     (out / "frames").mkdir(parents=True, exist_ok=True)
@@ -204,9 +215,10 @@ def main() -> int:
         for run in range(runs + 1):
             for name, src, target in pairs:
                 n += 1
-                exe, args, _ = players[name]
+                exe, args, _, extra = players[name]
                 env = dict(os.environ)
-                if name == "ChikChik":
+                env.update(extra)
+                if name.startswith("ChikChik"):
                     env["QTC_STARTUP_LOG"] = str(stage_log)
                 shot = (out / "frames" / f"{name}_{src.stem}.png") if run == 1 else None
                 r = measure(ctl, screen, exe, args, target, timeout, env, shot)
@@ -254,21 +266,24 @@ def main() -> int:
     blocks = read_stages(stage_log)
     stage_rows = []
     for r in rows:
-        if r["player"] == "ChikChik" and r["pid"] in blocks:
+        if r["player"].startswith("ChikChik") and r["pid"] in blocks:
             for ms, text in blocks[r["pid"]]:
-                stage_rows.append({"file": r["file"], "run": r["run"], "warmup": r["warmup"],
-                                   "stage": stage_key(text), "ms": ms})
+                stage_rows.append({"player": r["player"], "file": r["file"], "run": r["run"],
+                                   "warmup": r["warmup"], "stage": stage_key(text), "ms": ms})
     if stage_rows:
         with open(out / "chikchik_stages.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["file", "run", "warmup", "stage", "ms"])
+            writer = csv.DictWriter(f, fieldnames=["player", "file", "run", "warmup", "stage",
+                                                   "ms"])
             writer.writeheader()
             writer.writerows(stage_rows)
         lines += ["", "ChikChik stages — median ms since process creation (measured runs)"]
-        for src, _ in files:
-            sel = [s for s in stage_rows if s["file"] == src.name and not s["warmup"]]
+        for player, (src, _) in [(p, f) for f in files for p in players
+                                 if p.startswith("ChikChik")]:
+            sel = [s for s in stage_rows if s["file"] == src.name and not s["warmup"]
+                   and s["player"] == player]
             if not sel:
                 continue
-            lines.append(f"  {src.name}")
+            lines.append(f"  {src.name}" + (f"   [{player}]" if variants else ""))
             order: list[str] = []
             for s in sel:
                 if s["stage"] not in order:

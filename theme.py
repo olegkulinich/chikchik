@@ -39,6 +39,7 @@ GAP2 = 16
 FONT_PX = 12
 
 FONT_FAMILY = "Inter"
+EMOJI_FAMILY = "Segoe UI Emoji" if sys.platform == "win32" else "Noto Color Emoji"
 
 
 def base_dir() -> Path:
@@ -73,7 +74,7 @@ def emoji_icon(emoji: str = "✂️", size: int = 256) -> QIcon:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    font = QFont("Segoe UI Emoji" if sys.platform == "win32" else "Noto Color Emoji")
+    font = QFont(EMOJI_FAMILY)
     font.setPixelSize(int(size * 0.78))
     painter.setFont(font)
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, emoji)

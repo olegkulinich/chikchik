@@ -47,10 +47,23 @@ class VideoView(QOpenGLWidget):
             input_vo_keyboard=False,
             osd_level=0,
             sid="no",                     # subtitles off unless picked in the menu
+            # E2: keep the audio device fed with silence while paused — after a pause
+            # longer than ~10–15 s Windows let it sleep, and play started with a jump +
+            # stall while it woke up (user test 2026-11-14: gone with this option).
+            audio_stream_silence="yes",
         )
         if os.environ.get("QTC_SAFE_GL"):     # software GL in tests
             options.update(gpu_dumb_mode="yes", hwdec="no")
+        # E2 (55g): extra mpv options for experiments without a new build, e.g.
+        # QTC_MPV_OPTS="audio-stream-silence=yes audio-buffer=0.1"
+        for item in os.environ.get("QTC_MPV_OPTS", "").split():
+            name, _, value = item.partition("=")
+            if name:
+                options[name.strip().replace("-", "_")] = value.strip() or "yes"
+        perf_log.resume.log(f"mpv options: {options}")
         startup_log.mark("mpv module imported")
+        # E2 build 2 (E): the options of this run, so a bench with QTC_MPV_OPTS is provable
+        startup_log.mark("mpv options: " + " ".join(f"{k}={v}" for k, v in options.items()))
         self.player = mpv.MPV(**options)
         startup_log.mark("mpv core created")
         self._mpv = mpv
@@ -108,10 +121,41 @@ class VideoView(QOpenGLWidget):
             self.player, "opengl",
             opengl_init_params={"get_proc_address": self._get_proc},
         )
-        self._render.update_cb = self._frame_ready.emit
+        self._render.update_cb = self._on_render_update
         startup_log.mark("GL: mpv render context ready")
+        self._send_preload()                               # E2 (55b')
         if startup_log.ENABLED:
             self.frameSwapped.connect(self._startup_swapped)
+        if perf_log.resume.enabled:
+            self.frameSwapped.connect(self._resume_swapped)
+
+    def _on_render_update(self) -> None:                 # mpv thread: a new frame is ready
+        if self._resume_t0 is not None and self._resume_stage == "unpaused":
+            self._resume_step("mpv frame ready", "frame")
+        self._frame_ready.emit()
+
+    def _resume_step(self, text: str, stage: str) -> None:
+        t0 = self._resume_t0
+        if t0 is None:
+            return
+        self._resume_stage = stage
+        perf_log.resume.log(f"  +{(time.perf_counter() - t0) * 1000:7.1f} ms  {text}")
+
+    def _resume_swapped(self) -> None:
+        if self._resume_t0 is not None and self._resume_stage == "painted":
+            self._resume_step("swapped (on screen)", "done")
+            perf_log.resume.log(f"  audio: {self._safe_get('current-ao')} · "
+                                f"{self._safe_get('audio-device')} · "
+                                f"hwdec {self._state.get('hwdec-current')} · "
+                                f"vsync {self._safe_get('video-sync')} · "
+                                f"display {self._safe_get('display-fps')} Hz")
+            self._resume_t0 = None
+
+    def _safe_get(self, name: str):
+        try:
+            return self.player[name]
+        except Exception:
+            return "?"
 
     def _startup_swapped(self) -> None:
         """T55a: the first swap after mpv drew a real video frame ends the startup log."""
@@ -146,6 +190,8 @@ class VideoView(QOpenGLWidget):
                 },
             )
             painter.endNativePainting()
+            if self._resume_t0 is not None and self._resume_stage == "frame":
+                self._resume_step("painted", "painted")
             if perf_log.ENABLED and self._scrub_mode:
                 perf_log.log(f"render {(time.perf_counter() - started) * 1000:6.2f} ms")
         if not self.has_video:
@@ -342,6 +388,8 @@ class VideoView(QOpenGLWidget):
             perf_log.log(f"shown  frame {round(value / self.frame_duration_s)}")
         if name == "pause" and value:
             self._stepping_until = 0.0                     # the step is over
+        if name == "pause" and not value and self._resume_t0 is not None:
+            self._resume_step("mpv unpaused", "unpaused")
         if name in ("dwidth", "dheight"):
             self._frame_ready.emit()
             self._display_changed.emit()
@@ -372,6 +420,36 @@ class VideoView(QOpenGLWidget):
             pass
 
     # ------------------------------------------------------- control
+    _preloaded: str | None = None
+
+    def preload(self, path: Path, autoplay: bool) -> None:
+        """E2 (55b'): start loading before ffprobe and the UI are done; `load` with the
+        same path then skips its loadfile. mpv drops the video track if the file opens
+        before the render context exists, so the loadfile waits for initializeGL."""
+        self._preloaded = str(path)
+        self._preload_waiting = True
+        self._set("pause", not autoplay)
+        self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
+        self._set("background", "tiles")     # mpv ≥ 0.38
+        if self._render is not None:
+            self._send_preload()
+
+    _preload_waiting = False
+
+    def _send_preload(self) -> None:
+        if self._preload_waiting and self._preloaded is not None:
+            self._preload_waiting = False
+            startup_log.mark("mpv: loadfile sent (preload)", once=True)
+            self._command("loadfile", self._preloaded, "replace")
+
+    def cancel_preload(self) -> None:
+        if self._preloaded is not None:
+            sent = not self._preload_waiting
+            self._preloaded = None
+            self._preload_waiting = False
+            if sent:
+                self._command("stop")
+
     def load(self, path: Path | str, frame_size: tuple[int, int], aid: int | None,
              sid: int | None = None, autoplay: bool = True,
              frame_duration: float | None = None, sequence_fps: float | None = None) -> None:
@@ -383,36 +461,58 @@ class VideoView(QOpenGLWidget):
         self._in_flight = self._pending = None
         paused = not autoplay        # T35: off → the first frame, paused
         self._state.update({"time-pos": None, "eof-reached": False, "pause": paused})
-        self.player.pause = paused   # before loadfile: mpv shows frame 1 and waits
+        # E2 build 2 (2.2): all async, in order — a synchronous property set waits while
+        # the mpv core opens the (preloaded) file and froze the UI for ~200 ms.
+        self._set("pause", paused)   # before loadfile: mpv shows frame 1 and waits
         if sequence_fps:
-            self._set_option("mf-fps", f"{sequence_fps:.6f}")
+            self._set("mf-fps", f"{sequence_fps:.6f}")
         # T36: transparency on a checkerboard (export decides the rest)
-        self._set_option("alpha", "blend-tiles")    # mpv ≤ 0.37
-        self._set_option("background", "tiles")     # mpv ≥ 0.38
-        startup_log.mark("mpv: loadfile sent", once=True)
-        self.player.command("loadfile", str(path), "replace")
-        self.set_audio(aid)
-        self.set_subtitle(sid)
-        self.player.pause = paused
+        self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
+        self._set("background", "tiles")     # mpv ≥ 0.38
+        if self._preloaded is not None and self._preloaded == str(path) \
+                and not self._preload_waiting:
+            startup_log.mark("mpv: preloaded file kept")       # E2: already loading
+            self.set_audio(aid)          # mpv was idle before the preload: plain sets hold
+            self.set_subtitle(sid)
+        else:
+            startup_log.mark("mpv: loadfile sent", once=True)
+            self._loadfile(str(path), aid, sid)
+        self._preloaded = None
+        self._preload_waiting = False
+        self._set("pause", paused)
         self.update()
 
-    def _set_option(self, name: str, value: str) -> None:
+    def _loadfile(self, url: str, aid: int | None, sid: int | None) -> None:
+        """Tracks go with the loadfile as per-file options: an async `set aid` sent right
+        after an async loadfile reaches the file being closed and is lost (sequence → mp4
+        opened silent). Named arguments read the same in mpv ≤ 0.37 and ≥ 0.38 (which
+        added an index argument). Rejected → the old way, sets after the loadfile."""
+        tracks = f"aid={aid if aid else 'no'},sid={sid if sid else 'no'}"
+
+        def reply(error, _data) -> None:                    # mpv event thread
+            if error:
+                self._command("loadfile", url, "replace")
+                self.set_audio(aid)
+                self.set_subtitle(sid)
+
         try:
-            self.player[name] = value
+            self.player.command_async("loadfile", url=url, flags="replace", options=tracks,
+                                      callback=reply)
         except Exception:
-            pass                     # option renamed or missing in this libmpv
+            reply(True, None)
+
+    def _set(self, name: str, value) -> None:
+        """Async property/option set; an unknown name (renamed in this libmpv) only
+        fails inside mpv, silently."""
+        if isinstance(value, bool):
+            value = "yes" if value else "no"
+        self._command("set", name, str(value))
 
     def set_audio(self, aid: int | None) -> None:
-        try:
-            self.player.aid = aid if aid else "no"
-        except Exception:
-            pass
+        self._set("aid", aid if aid else "no")
 
     def set_subtitle(self, sid: int | None) -> None:
-        try:
-            self.player.sid = sid if sid else "no"
-        except Exception:
-            pass
+        self._set("sid", sid if sid else "no")
 
     def unload(self) -> None:
         self._command("stop")
@@ -495,7 +595,17 @@ class VideoView(QOpenGLWidget):
     def seek_relative(self, delta: float) -> None:
         self._command("seek", f"{delta:.6f}", "relative+exact")
 
+    _resume_t0: float | None = None     # E2 (55g): Space pressed → waiting for a new frame
+    _resume_stage = ""
+
     def _set_pause(self, paused: bool) -> None:
+        if perf_log.resume.enabled:
+            if not paused and self._state.get("pause"):
+                self._resume_t0 = time.perf_counter()
+                self._resume_stage = "sent"
+                perf_log.resume.log(f"resume: pause=no sent at {self._state.get('time-pos')}")
+            else:
+                self._resume_t0 = None
         self._state["pause"] = paused          # optimistic: the play button reacts at once
         self._command("set", "pause", "yes" if paused else "no")
 
