@@ -556,6 +556,9 @@ class MainWindow(QMainWindow):
             if self.windowState() & Qt.WindowState.WindowFullScreen:   # never start fullscreen
                 self.setWindowState(self.windowState() & ~Qt.WindowState.WindowFullScreen)
         startup_log.mark("MainWindow: geometry restored")
+        if startup_log.ENABLED:          # E2 build 2: native window + GL driver vs the DWM call
+            self.winId()
+            startup_log.mark("MainWindow: native window (winId)")
         theme.dark_title_bar(self)
         startup_log.mark("MainWindow: dark title bar")
         self._apply_layout()                     # T27: the remembered UI mode
@@ -608,13 +611,24 @@ class MainWindow(QMainWindow):
         transport.setContentsMargins(0, 0, 0, 0)
         transport.setSpacing(theme.HGAP)
         self.play_button = PlayButton()
+        startup_log.mark("UI: transport · PlayButton")
         self.play_button.clicked.connect(lambda: (self.toggle_play(), self._sync_play()))
         self.timeline = Timeline()
         self.timeline.seek_requested.connect(self._timeline_seek)
         self.timeline.edge_preview.connect(self._edge_preview)
         self.timeline.in_dragged.connect(lambda t: self.set_in(t, step=False))
         self.timeline.out_dragged.connect(lambda t: self.set_out(t, step=False))
+        startup_log.mark("UI: transport · Timeline")
         self.time_field = Field("⌛", 110)   # emoji, like the app icon
+        startup_log.mark("UI: transport · ⌛ Field")
+        if os.environ.get("QTC_SYMBOL_FONT", "") not in ("", "0"):
+            # E2 build 2 (C): name the emoji font instead of letting Qt search for a
+            # fallback that has ⌛ (same color glyph on Windows).
+            self.time_field.prefix.setStyleSheet(f'font-family: "{theme.EMOJI_FAMILY}";')
+        if startup_log.ENABLED:          # glyph fallback cost shows here, not at first paint
+            self.time_field.prefix.ensurePolished()     # the stylesheet font, as painted
+            QFontMetrics(self.time_field.prefix.font()).horizontalAdvance("⌛")
+            startup_log.mark("UI: transport · ⌛ glyph measured")
         self.time_field.setToolTip("Current time")
         self.time_field.setText("00:00.000")
         self.time_field.committed.connect(self._time_field_committed)
@@ -625,6 +639,10 @@ class MainWindow(QMainWindow):
         transport.addWidget(self.play_button)
         self.loop_button = button("∞", checkable=True, tooltip="Loop (L)")    # T21
         self.loop_button.setFixedWidth(32)
+        if startup_log.ENABLED:
+            self.loop_button.ensurePolished()
+            QFontMetrics(self.loop_button.font()).horizontalAdvance("∞")
+            startup_log.mark("UI: transport · ∞ button + glyph measured")
         self.loop_button.setChecked(self.config.flag("loop"))           # T53: remembered
         self.loop_button.toggled.connect(lambda on: (self.config.set_flag("loop", on),
                                                      self._update_loop()))
@@ -1051,6 +1069,7 @@ class MainWindow(QMainWindow):
                         autoplay=autoplay,                                 # T35
                         frame_duration=info.frame_duration,
                         sequence_fps=info.fps if sequence is not None else None)
+        startup_log.mark("video.load returned")
         if keep is None:
             start_format = self.config.start_format()                      # T25
             self.fmt = start_format if start_format in FORMATS else "mp4"

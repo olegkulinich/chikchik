@@ -7,6 +7,14 @@ import os
 import sys
 from pathlib import Path
 
+import gl_warm  # noqa: I001 — E2 (A): before PySide6, so the warm-up overlaps the imports
+
+gl_warm.start()
+if startup_log.ENABLED:          # which hidden switches this run had (bench variants)
+    _switches = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
+                         if k.startswith("QTC_") and k != "QTC_STARTUP_LOG")
+    startup_log.mark(f"env: {_switches or '-'}")
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication, QMessageBox

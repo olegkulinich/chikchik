@@ -58,6 +58,8 @@ class VideoView(QOpenGLWidget):
                 options[name.strip().replace("-", "_")] = value.strip() or "yes"
         perf_log.resume.log(f"mpv options: {options}")
         startup_log.mark("mpv module imported")
+        # E2 build 2 (E): the options of this run, so a bench with QTC_MPV_OPTS is provable
+        startup_log.mark("mpv options: " + " ".join(f"{k}={v}" for k, v in options.items()))
         self.player = mpv.MPV(**options)
         startup_log.mark("mpv core created")
         self._mpv = mpv
@@ -422,9 +424,9 @@ class VideoView(QOpenGLWidget):
         before the render context exists, so the loadfile waits for initializeGL."""
         self._preloaded = str(path)
         self._preload_waiting = True
-        self.player.pause = not autoplay
-        self._set_option("alpha", "blend-tiles")    # mpv ≤ 0.37
-        self._set_option("background", "tiles")     # mpv ≥ 0.38
+        self._set("pause", not autoplay)
+        self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
+        self._set("background", "tiles")     # mpv ≥ 0.38
         if self._render is not None:
             self._send_preload()
 
@@ -455,42 +457,58 @@ class VideoView(QOpenGLWidget):
         self._in_flight = self._pending = None
         paused = not autoplay        # T35: off → the first frame, paused
         self._state.update({"time-pos": None, "eof-reached": False, "pause": paused})
-        self.player.pause = paused   # before loadfile: mpv shows frame 1 and waits
+        # E2 build 2 (2.2): all async, in order — a synchronous property set waits while
+        # the mpv core opens the (preloaded) file and froze the UI for ~200 ms.
+        self._set("pause", paused)   # before loadfile: mpv shows frame 1 and waits
         if sequence_fps:
-            self._set_option("mf-fps", f"{sequence_fps:.6f}")
+            self._set("mf-fps", f"{sequence_fps:.6f}")
         # T36: transparency on a checkerboard (export decides the rest)
-        self._set_option("alpha", "blend-tiles")    # mpv ≤ 0.37
-        self._set_option("background", "tiles")     # mpv ≥ 0.38
+        self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
+        self._set("background", "tiles")     # mpv ≥ 0.38
         if self._preloaded is not None and self._preloaded == str(path) \
                 and not self._preload_waiting:
             startup_log.mark("mpv: preloaded file kept")       # E2: already loading
+            self.set_audio(aid)          # mpv was idle before the preload: plain sets hold
+            self.set_subtitle(sid)
         else:
             startup_log.mark("mpv: loadfile sent", once=True)
-            self.player.command("loadfile", str(path), "replace")
+            self._loadfile(str(path), aid, sid)
         self._preloaded = None
         self._preload_waiting = False
-        self.set_audio(aid)
-        self.set_subtitle(sid)
-        self.player.pause = paused
+        self._set("pause", paused)
         self.update()
 
-    def _set_option(self, name: str, value: str) -> None:
+    def _loadfile(self, url: str, aid: int | None, sid: int | None) -> None:
+        """Tracks go with the loadfile as per-file options: an async `set aid` sent right
+        after an async loadfile reaches the file being closed and is lost (sequence → mp4
+        opened silent). Named arguments read the same in mpv ≤ 0.37 and ≥ 0.38 (which
+        added an index argument). Rejected → the old way, sets after the loadfile."""
+        tracks = f"aid={aid if aid else 'no'},sid={sid if sid else 'no'}"
+
+        def reply(error, _data) -> None:                    # mpv event thread
+            if error:
+                self._command("loadfile", url, "replace")
+                self.set_audio(aid)
+                self.set_subtitle(sid)
+
         try:
-            self.player[name] = value
+            self.player.command_async("loadfile", url=url, flags="replace", options=tracks,
+                                      callback=reply)
         except Exception:
-            pass                     # option renamed or missing in this libmpv
+            reply(True, None)
+
+    def _set(self, name: str, value) -> None:
+        """Async property/option set; an unknown name (renamed in this libmpv) only
+        fails inside mpv, silently."""
+        if isinstance(value, bool):
+            value = "yes" if value else "no"
+        self._command("set", name, str(value))
 
     def set_audio(self, aid: int | None) -> None:
-        try:
-            self.player.aid = aid if aid else "no"
-        except Exception:
-            pass
+        self._set("aid", aid if aid else "no")
 
     def set_subtitle(self, sid: int | None) -> None:
-        try:
-            self.player.sid = sid if sid else "no"
-        except Exception:
-            pass
+        self._set("sid", sid if sid else "no")
 
     def unload(self) -> None:
         self._command("stop")
