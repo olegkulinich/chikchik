@@ -23,3 +23,6 @@ LICENSE.LGPL
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Bench / stress test output (tools/bench)
+tools/bench/results/
