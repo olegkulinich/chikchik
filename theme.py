@@ -132,6 +132,18 @@ def cloak(widget: QWidget, on: bool) -> None:
         pass
 
 
+def dwm_flush() -> None:
+    """E3 (T91): block until DWM's next composition (QTC_UNCLOAK_FLUSH=1)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.dwmapi.DwmFlush()
+    except Exception:
+        pass
+
+
 def stylesheet() -> str:
     return f"""
 * {{
