@@ -70,6 +70,7 @@ class Session:
         self.counts = {"cycles": 0, "HANG": 0, "HANG recovered": 0, "CRASH": 0, "STALL": 0,
                        "restarts": 0, "focus lost": 0, "frame steps": 0, "scrubs": 0}
         self.note = args.note or ""
+        self.quiet = args.quiet
 
     # ---------------------------------------------------------------- log
     def elapsed(self) -> float:
@@ -377,8 +378,11 @@ class Session:
         self.log("\n" + summary)
         self.log_file.close()
         self.metrics.close()
-        w.message(f"Stress test ({self.name}) — done",
-                  f"{summary}\n\nResults:\n{self.out}", warning=verdict.startswith("PROB"))
+        if self.quiet:                       # stress_all.bat: no dialog between tests
+            w.user32.MessageBeep(w.MB_ICONINFORMATION)
+        else:
+            w.message(f"Stress test ({self.name}) — done",
+                      f"{summary}\n\nResults:\n{self.out}", warning=verdict.startswith("PROB"))
 
 
 def main() -> int:
@@ -389,6 +393,7 @@ def main() -> int:
     parser.add_argument("--file")
     parser.add_argument("--seed", type=int)
     parser.add_argument("--note", help="e.g. 'obs capture' — goes into the log")
+    parser.add_argument("--quiet", action="store_true", help="no dialog at the end")
     session = Session(parser.parse_args(), config)
     stopped = ""
     try:
@@ -400,7 +405,7 @@ def main() -> int:
         session.log(stopped)
     finally:
         session.finish(stopped)
-    return 0
+    return 2 if stopped.startswith(("Ctrl+Alt+Q", "stopped from")) else 0   # 2: user stop
 
 
 if __name__ == "__main__":
