@@ -87,14 +87,34 @@ def calc_size(hwnd, wparam, lparam) -> bool:
     return True
 
 
+DWMWA_BORDER_COLOR = 34            # Windows 11 (build 22000+); error on Windows 10
+DWMWA_COLOR_NONE = 0xFFFFFFFE
+DWMWA_COLOR_DEFAULT = 0xFFFFFFFF
+
+
+def _set_border_color(hwnd: int, color: int) -> None:
+    """T54c: the Win11 1 px window border — none in Hide UI, system default otherwise.
+    Windows 10 rejects the attribute: ignored."""
+    try:
+        fn = _dwm.DwmSetWindowAttribute
+        fn.restype = ctypes.c_long
+        fn.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+        value = ctypes.c_uint32(color)
+        fn(ctypes.c_void_p(hwnd), DWMWA_BORDER_COLOR, ctypes.byref(value), ctypes.sizeof(value))
+    except Exception:
+        pass
+
+
 def refresh(widget, hidden: bool) -> None:
-    """Re-run WM_NCCALCSIZE after switching; a 1 px DWM margin keeps the shadow."""
+    """Re-run WM_NCCALCSIZE after switching. T54 (B2): Hide UI = video only — no DWM
+    margin (it drew the shadow) and no Win11 border."""
     if not ENABLED:
         return
     try:
         hwnd = int(widget.winId())
-        margins = _MARGINS(0, 0, 1 if hidden else 0, 0)
+        margins = _MARGINS(0, 0, 0, 0)
         _dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+        _set_border_color(hwnd, DWMWA_COLOR_NONE if hidden else DWMWA_COLOR_DEFAULT)
         # SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
         _user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020)
     except Exception:
