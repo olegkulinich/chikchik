@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -94,6 +95,7 @@ from widgets import (
     Toast,
     button,
     dim_label,
+    key_tip,
 )
 
 VIDEO_FILTER = ("Video or frame (*.mp4 *.mkv *.mov *.m4v *.avi *.webm *.mts *.ts *.png *.jpg *.jpeg)"
@@ -578,6 +580,18 @@ class MainWindow(QMainWindow):
             self._settings_popover = SettingsPopover(self.config, self)
         return self._settings_popover
 
+    def _popover_open(self) -> bool:
+        """T56: Settings or Hotkeys on screen (they aren't modal any more)."""
+        return any(p is not None and p.isVisible()
+                   for p in (self._settings_popover, self._hotkeys_popover))
+
+    def toggle_hotkeys(self) -> None:
+        """Ctrl+/ opens Hotkeys; pressed again (focus on the main window) closes it."""
+        if self._hotkeys_popover is not None and self._hotkeys_popover.isVisible():
+            self._hotkeys_popover.close()
+        else:
+            self.hotkeys_popover.popup_over(self.video)
+
     @property
     def hotkeys_popover(self) -> HotkeysPopover:
         if self._hotkeys_popover is None:
@@ -660,8 +674,7 @@ class MainWindow(QMainWindow):
         self.time_field.ctrl_click = True
         self.time_field.ctrl_clicked.connect(self.toggle_frames_mode)          # T39
         transport.addWidget(self.play_button)
-        loop_key = display_key(self.config.hotkey("loop"))
-        self.loop_button = button("∞", checkable=True, tooltip=f"Loop ({loop_key})")    # T21
+        self.loop_button = button("∞", checkable=True)              # T21; tooltip: T48
         self.loop_button.setFixedWidth(32)
         if startup_log.ENABLED:
             self.loop_button.ensurePolished()
@@ -771,7 +784,7 @@ class MainWindow(QMainWindow):
 
     def _install_menu_actions(self) -> None:
         handlers = {
-            "hotkeys": lambda: self.hotkeys_popover.popup_over(self.video),
+            "hotkeys": self.toggle_hotkeys,
             "settings": self._show_settings,
             "open": self.open_dialog,
             "export": lambda: self.export(ask=False),       # T42: like Save
@@ -809,7 +822,18 @@ class MainWindow(QMainWindow):
             # T50b: Ctrl+/ by the physical key — on a Russian layout it types "." and Qt
             # (matching by the character) never opened Hotkeys
             if kind == QEvent.Type.KeyPress and not event.isAutoRepeat():
-                self.hotkeys_popover.popup_over(self.video)
+                self.toggle_hotkeys()
+            event.accept()
+            return True
+        if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier \
+                and win_frame.is_slash_key(event) \
+                and self.config.hotkey("jump_playhead") == "/" \
+                and not isinstance(QApplication.focusWidget(), QLineEdit):
+            # T50: plain / by the physical key too (RU types "." there); never while a
+            # field is being typed in — "." is a decimal point there
+            if kind == QEvent.Type.KeyPress:
+                self.jump_to_playhead()
             event.accept()
             return True
         if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
@@ -872,6 +896,7 @@ class MainWindow(QMainWindow):
             "play": self.toggle_play,
             "loop": lambda: self.loop_button.toggle() if self.info is not None else None,
             "fullscreen": self.toggle_fullscreen,                         # T22
+            "jump_playhead": self.jump_to_playhead,                       # T50
             "mute": self.toggle_mute,                                     # T66
             "volume_up": lambda: self.change_volume(self.VOLUME_STEP),
             "volume_down": lambda: self.change_volume(-self.VOLUME_STEP),
@@ -902,6 +927,27 @@ class MainWindow(QMainWindow):
             shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
             shortcut.activated.connect(self._escape)
             self._shortcuts.append(shortcut)
+        self._update_tooltips()
+
+    def _key_text(self, action_id: str) -> str:
+        """Shown key of an action, '' when it has none (menus and tooltips show nothing)."""
+        key = self.config.hotkey(action_id)
+        return display_key(key) if key else ""
+
+    # B2-2b: at most 2 lines — name + key, then an optional note
+    TIPS = {"play_button": ("Play / Pause", "play", ""),
+            "loop_button": ("Loop", "loop", ""),
+            "trim_button": ("Trim", "trim", "Export only the In–Out range (off: the whole file)"),
+            "crop_button": ("Crop", "crop", "Drag on the video\nto draw a frame")}   # even lines
+
+    def _update_tooltips(self) -> None:
+        """T48 (B2): the current key (follows remapping) grey at the end of existing
+        tooltips. T105: ⌛ names its Ctrl+Click — the mode a click switches to."""
+        for name, (text, action_id, note) in self.TIPS.items():
+            getattr(self, name).setToolTip(key_tip(text, self._key_text(action_id), note))
+        other = "Timecode" if self._frames_mode() else "Frames"
+        # B2-2b: a gesture, not a remappable key → its own grey line below
+        self.time_field.setToolTip(key_tip("Current time", "", f"Ctrl+Click — {other}"))
 
     def _escape(self) -> None:
         if self._fullscreen:
@@ -995,7 +1041,8 @@ class MainWindow(QMainWindow):
         row("fit_window", self.info is not None and not self._fullscreen)   # T43
         # Toggles name what a click will do (Fullscreen ↔ Exit Fullscreen) — no checkmarks
         self._menu_choice(menu, "Exit Fullscreen" if self._fullscreen else "Fullscreen", False,
-                          self.toggle_fullscreen, hint=display_key(self.config.hotkey("fullscreen")),
+                          self.toggle_fullscreen,
+                          hint=self._key_text("fullscreen"),
                           check_column=False)
         # T27: names say what a click does
         row("minimize_ui", title="Restore UI" if self._ui_mode == "minimal" else "Minimize UI")
@@ -1573,6 +1620,7 @@ class MainWindow(QMainWindow):
         self.timeline.set_frames_mode(self._frames_mode())
         self._show_times()
         self.time_field.setText(self._fmt(self.timeline.position))
+        self._update_tooltips()                                          # T105
 
     def _frame_of(self, t: float) -> int:
         return round(t / self._step(False))
@@ -1610,6 +1658,11 @@ class MainWindow(QMainWindow):
         return parse_time(text if not text.strip().lower().endswith("f") else cleaned)
 
     # ------------------------------------------------- Home/End (T41)
+    def jump_to_playhead(self) -> None:
+        """T50 `/`: the zoomed timeline scrolls so the playhead is in the middle."""
+        if self.info is not None:
+            self.timeline.center_on(self.timeline.position)
+
     def _go_to(self, start: bool) -> None:
         """Start/end of the trim range (or the file); playback keeps its state."""
         if self.info is None:
@@ -1939,6 +1992,7 @@ class MainWindow(QMainWindow):
 
     def _show_format(self) -> None:
         self.format_button.setText(self._format_label(self.fmt))
+        self._sync_settings_encoder()
 
     def set_format(self, fmt: str, explain: bool = False) -> None:
         if fmt not in FORMATS:
@@ -2213,7 +2267,7 @@ class MainWindow(QMainWindow):
         held = bool(QApplication.mouseButtons())
         focus = QApplication.focusWidget()
         popup = (QApplication.activePopupWidget() is not None
-                 or QApplication.activeModalWidget() is not None)   # menus; Settings/Hotkeys (9a)
+                 or self._popover_open())          # menus; Settings/Hotkeys (9a, T56)
         for reveal in (self._panels_reveal, self._title_reveal):
             if not reveal.active:
                 continue
@@ -2241,7 +2295,7 @@ class MainWindow(QMainWindow):
             return
         if (self._fullscreen and not self._cursor_hidden and not held
                 and not self._panels_reveal.shown and QApplication.activePopupWidget() is None
-                and QApplication.activeModalWidget() is None
+                and not self._popover_open()
                 and self.isActiveWindow()
                 and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
             QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
@@ -2257,8 +2311,12 @@ class MainWindow(QMainWindow):
 
     def nativeEvent(self, event_type, message):  # noqa: N802
         msg = win_frame.message(event_type, message) if not self._fullscreen else None
-        if msg is not None and msg[0] == win_frame.WM_SIZING and win_frame.shift_down():
-            if self._keep_aspect(int(msg[2]), msg[3]):                # T44
+        if msg is not None and msg[0] in (win_frame.WM_ENTERSIZEMOVE, win_frame.WM_EXITSIZEMOVE):
+            self._sizing_aspect = None                                # T106: a new drag
+        if msg is not None and msg[0] == win_frame.WM_SIZING:
+            if not win_frame.shift_down():
+                self._sizing_aspect = None                            # Shift up → taken again
+            elif self._keep_aspect(int(msg[2]), msg[3]):              # T44
                 return True, 1
         if self._frame_hidden and not self._fullscreen:
             if msg is not None:
@@ -2292,10 +2350,15 @@ class MainWindow(QMainWindow):
         return dw / dh if dw and dh else None
 
     def _keep_aspect(self, edge: int, lparam) -> bool:
-        """T44: Shift while dragging an edge/corner keeps the video's proportions
-        (like Photoshop). Works in physical px — WM_SIZING's RECT is the native window
+        """T44: Shift while dragging an edge/corner keeps the proportions (like
+        Photoshop) — T106: the video area's current ones, not the picture's. Works in physical px — WM_SIZING's RECT is the native window
         rect, so the window's own size is taken from Windows too (not Qt's frame)."""
-        aspect = self._video_aspect()
+        if getattr(self, "_sizing_aspect", None) is None:
+            # T106: the proportions of the moment Shift went down (or the drag began
+            # with it held) — the window never jumps to the video's aspect by itself
+            self._sizing_aspect = win_frame.drag_aspect(
+                self.video.width(), self.video.height(), self._video_aspect())
+        aspect = self._sizing_aspect
         native = win_frame.window_size(self.winId())
         if aspect is None or native is None:
             return False
@@ -2736,9 +2799,18 @@ class MainWindow(QMainWindow):
                                 action=False, ms=2500)
 
     def _show_settings(self) -> None:
-        # T16b: Quality/Speed only matter for x264 (.mp4)
-        self.settings_popover.set_encoder_enabled(self.info is None or self._kind() == "mp4")
+        """Ctrl+K opens Settings; pressed again (focus on the main window) closes it."""
+        if self._settings_popover is not None and self._settings_popover.isVisible():
+            self._settings_popover.close()
+            return
         self.settings_popover.popup_over(self.video)
+        self._sync_settings_encoder()
+
+    def _sync_settings_encoder(self) -> None:
+        """T16b: Quality/Speed only matter for x264 (.mp4). T56: Settings can stay open
+        while the format changes, so this follows every format change."""
+        if self._settings_popover is not None:
+            self._settings_popover.set_encoder_enabled(self.info is None or self._kind() == "mp4")
 
     @staticmethod
     def _remove(path: Path) -> None:
@@ -2809,6 +2881,9 @@ class MainWindow(QMainWindow):
 
             value = None if self._fullscreen else placeholder.save_value(self.winId())
             self.config.set_placeholder(f"{value},{self._ui_mode}" if value else "")
+        for popover in (self._settings_popover, self._hotkeys_popover):   # T56: not modal —
+            if popover is not None:                                        # they'd keep the app alive
+                popover.close()
         self.poll.stop()
         self.video.shutdown()
         event.accept()

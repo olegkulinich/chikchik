@@ -1,7 +1,7 @@
 """Small custom widgets: fields, buttons, timeline, popover, toast."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 )
 
 import math
+import html
+import sys
 import time
 
 from PySide6.QtGui import QCursor, QFont, QFontDatabase, QInputDevice, QPointingDevice
@@ -33,6 +35,49 @@ def button(text: str = "", checkable: bool = False, tooltip: str = "") -> QPushB
     if tooltip:
         b.setToolTip(tooltip)
     return b
+
+
+KEY_GAP = 6     # B2-2b: name → key in tooltips (user sketch; was 16 like the menu)
+
+
+def key_tip(text: str, key: str, note: str = "") -> str:
+    """T48 (B2): tooltip with its key grey after the name. B2-2b (user sketch): key
+    KEY_GAP after the name, optional grey `note` below (\\n = own line break, like
+    Crop; at most 3 lines in all). No key and no note → plain text."""
+    if not key and not note:
+        return text
+    cell = f'<td nowrap>{html.escape(text)}</td>'
+    if key:
+        cell += (f'<td nowrap style="padding-left: {KEY_GAP}px; color: {theme.DIM};">'
+                 f'{html.escape(key).replace(" ", "&nbsp;")}</td>')
+    line = f'<table cellspacing="0" cellpadding="0"><tr>{cell}</tr></table>'
+    if not note:
+        return line
+    # own table for the name + key line: a long note can't push the key to the right
+    rows = (f'<tr><td nowrap>{line}</td></tr>'
+            f'<tr><td nowrap style="color: {theme.DIM};">'
+            f'{html.escape(note).replace(chr(10), "<br>")}</td></tr>')
+    return f'<table cellspacing="0" cellpadding="0">{rows}</table>'
+
+
+# B2-2b: on another layout (RU…) a key still reads as its Latin key — the physical
+# key (Windows virtual-key code), so "Щ" is recorded and matched as "O".
+_VK_OEM = {0xBA: ";", 0xBB: "=", 0xBC: ",", 0xBD: "-", 0xBE: ".", 0xBF: "/",
+           0xC0: "`", 0xDB: "[", 0xDC: "\\", 0xDD: "]", 0xDE: "'"}
+
+
+def portable_combo(event: QKeyEvent) -> str:
+    """Key event → portable text ("Ctrl+Shift+T"), non-Latin letters as Latin."""
+    key = int(event.key())
+    if sys.platform == "win32" and 0x7F < key < 0x01000000:     # printable, not ASCII
+        vk = event.nativeVirtualKey()
+        if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:            # digits, A–Z = ASCII
+            key = vk
+        elif vk in _VK_OEM:
+            key = ord(_VK_OEM[vk])
+    mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+    return QKeySequence(QKeyCombination(mods, Qt.Key(key))).toString(
+        QKeySequence.SequenceFormat.PortableText)
 
 
 def dim_label(text: str) -> QLabel:
@@ -475,6 +520,11 @@ class CheckBox(QWidget):
             self.checked = value
             self.update()
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()                    # RMB → the popover drags (B2-2b)
+        # LMB stays here (accepted) — a click on the box doesn't drag the popover
+
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
             self.set_checked(not self.checked)
@@ -628,6 +678,15 @@ class Timeline(QWidget):
 
     def is_zoomed(self) -> bool:
         return self.duration > 0 and self.view_end - self.view_start < self.duration - 1e-9
+
+    def center_on(self, t: float) -> bool:
+        """T50: move the visible window (same zoom) so `t` is in the middle — up to the
+        file edges. Not zoomed → nothing to move."""
+        if not self.is_zoomed():
+            return False
+        span = self._span()
+        self._set_view(t - span / 2, span)
+        return True
 
     # --- mapping (visible window)
     def _span(self) -> float:
@@ -889,12 +948,17 @@ def _glyph_font() -> str:
 
 
 class Popover(QFrame):
-    """Floating panel (Settings, Hotkeys). 9a: modal — a click outside doesn't close
-    it (only menus close that way); ✕, Esc or its own hotkey (`toggle_keys`) do."""
+    """Floating panel (Settings, Hotkeys). A click outside doesn't close it (only menus
+    close that way); ✕, Esc or its own hotkey (`toggle_keys`) do. T56 (B2): not modal —
+    the main window stays usable (no error ding) and its ✕ / Ctrl+Q close it too; an
+    owned window, so it stays above the main window."""
 
     CLOSE = 20
     toggle_keys: tuple[str, ...] = ()       # e.g. ("Ctrl+K",) — the key that opened it
     toggle_scan: int | None = None          # physical key (scan code) with Ctrl, e.g. /
+    QUIT_KEY = "Ctrl+Q"                     # fixed (MENU_SHORTCUTS), not remappable
+    config = None                           # B2-2b: Config, to remember the position
+    pos_name = ""                           # "settings" / "hotkeys"
 
     def __init__(self, title: str, parent=None):
         super().__init__(
@@ -903,8 +967,9 @@ class Popover(QFrame):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.NoDropShadowWindowHint,
         )
-        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._drag = None                   # (button, grab offset) while dragging
+        self._anchor: QWidget | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.panel = QFrame()
@@ -936,22 +1001,74 @@ class Popover(QFrame):
         self.body.addSpacing(10)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        combo = QKeySequence(event.keyCombination()).toString(
-            QKeySequence.SequenceFormat.PortableText)
+        combo = portable_combo(event)
         toggle = combo in self.toggle_keys or (
             self.toggle_scan is not None
             and event.modifiers() == Qt.KeyboardModifier.ControlModifier
             and event.nativeScanCode() == self.toggle_scan)
+        # B2-2b: Ctrl+Q (fixed) closes the popover first — like PureRef; a 2nd Ctrl+Q
+        # (now on the main window) quits.
+        quits = combo == self.QUIT_KEY
         if (event.key() == Qt.Key.Key_Escape and event.modifiers() == Qt.KeyboardModifier.NoModifier) \
-                or toggle:
+                or toggle or quits:
             self.close()
             return
         super().keyPressEvent(event)
 
+    # ---- B2-2b: drag to move — RMB anywhere (like the main window), LMB on empty
+    # places (buttons, keys and fields take LMB themselves and don't pass it here).
+    def mousePressEvent(self, event) -> None:
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton) \
+                and self._drag is None:
+            self._drag = (event.button(),
+                          event.globalPosition().toPoint() - self.frameGeometry().topLeft())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag is not None and not (event.buttons() & self._drag[0]):
+            self._drag = None                 # release went elsewhere — stop
+        if self._drag is not None:
+            self.move(event.globalPosition().toPoint() - self._drag[1])
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._drag is not None and event.button() == self._drag[0]:
+            self._drag = None
+            self._remember()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _remember(self) -> None:
+        if self.config is None or not self.pos_name or self._anchor is None:
+            return
+        mid = self.pos() + QPoint(self.width() // 2, self.height() // 2)   # = popup_over's
+        offset = mid - self._anchor_center()
+        self.config.set_popover_offset(self.pos_name, offset.x(), offset.y())
+
+    def _anchor_center(self) -> QPoint:
+        a = self._anchor
+        return a.mapToGlobal(a.rect().center())
+
     def popup_over(self, widget: QWidget) -> None:
+        """Centred over `widget`; once dragged — at the same offset from its centre
+        (remembered between launches), kept fully on the screen."""
+        self._anchor = widget
         self.adjustSize()
-        center = widget.mapToGlobal(widget.rect().center())
-        self.move(center - QPoint(self.width() // 2, self.height() // 2))
+        center = self._anchor_center()
+        offset = self.config.popover_offset(self.pos_name) \
+            if self.config is not None and self.pos_name else None
+        if offset is not None:
+            center += QPoint(*offset)
+        top_left = center - QPoint(self.width() // 2, self.height() // 2)
+        screen = (QApplication.screenAt(center) or widget.screen()).availableGeometry()
+        x = max(screen.left(), min(top_left.x(), screen.right() + 1 - self.width()))
+        y = max(screen.top(), min(top_left.y(), screen.bottom() + 1 - self.height()))
+        self.move(x, y)
         self.show()
         self.activateWindow()
 
