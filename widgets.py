@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 import math
+import html
 import time
 
 from PySide6.QtGui import QCursor, QFont, QFontDatabase, QInputDevice, QPointingDevice
@@ -33,6 +34,16 @@ def button(text: str = "", checkable: bool = False, tooltip: str = "") -> QPushB
     if tooltip:
         b.setToolTip(tooltip)
     return b
+
+
+def key_tip(text: str, key: str) -> str:
+    """T48 (B2): tooltip with its key grey at the line end, 16 px from the text (like
+    the RMB menu). No key (unassigned) → plain text."""
+    if not key:
+        return text
+    return (f'<table cellspacing="0" cellpadding="0"><tr><td>{html.escape(text)}</td>'
+            f'<td style="padding-left: {theme.GAP2}px; color: {theme.DIM};">'
+            f'{html.escape(key).replace(" ", "&nbsp;")}</td></tr></table>')
 
 
 def dim_label(text: str) -> QLabel:
@@ -628,6 +639,15 @@ class Timeline(QWidget):
 
     def is_zoomed(self) -> bool:
         return self.duration > 0 and self.view_end - self.view_start < self.duration - 1e-9
+
+    def center_on(self, t: float) -> bool:
+        """T50: move the visible window (same zoom) so `t` is in the middle — up to the
+        file edges. Not zoomed → nothing to move."""
+        if not self.is_zoomed():
+            return False
+        span = self._span()
+        self._set_view(t - span / 2, span)
+        return True
 
     # --- mapping (visible window)
     def _span(self) -> float:

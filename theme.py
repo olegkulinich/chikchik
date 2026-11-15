@@ -174,7 +174,9 @@ QPushButton[seg="true"]:checked {{ background: {ACTIVE}; }}
 QPushButton[seg="true"]:disabled {{ color: {DIM}; background: {BUTTON}; }}
 QPushButton[seg="true"]:checked:disabled {{ color: {DIM}; background: {ACTIVE}; }}   /* T25: the pick stays visible */
 
-QPushButton[keycap="true"] {{ color: {DIM}; padding: 0 8px; }}
+/* T68 (B2): key caps look like input fields (recessed), not buttons */
+QPushButton[keycap="true"] {{ background: {FIELD}; color: {TEXT}; padding: 0 8px; }}
+QPushButton[keycap="true"][empty="true"] {{ color: {DIM}; }}
 QWidget#Panels[overlay="true"] {{ background: {WINDOW}; }}
 QWidget#TitleStrip {{ background: {WINDOW}; }}
 QPushButton#TitleButton, QPushButton#TitleClose {{
@@ -187,11 +189,11 @@ QPushButton#PopoverClose {{ background: transparent; border: none; color: {DIM};
     min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; }}
 QPushButton#PopoverClose:hover {{ background: transparent; color: {TEXT}; }}
 QScrollArea#HotkeysScroll, QScrollArea#HotkeysScroll > QWidget > QWidget {{ background: transparent; border: none; }}
-QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: {BUTTON_HOVER}; border-radius: 3px; min-height: 24px; }}
+QScrollBar:vertical {{ background: transparent; width: 4px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {BUTTON_HOVER}; border-radius: 2px; min-height: 24px; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
-QPushButton[keycap="true"]:hover {{ color: {TEXT}; }}
+QPushButton[keycap="true"]:hover {{ background: {FIELD}; color: {TEXT}; }}
 QPushButton[keycap="true"][capturing="true"] {{ background: {ACTIVE}; color: {TEXT}; }}
 QPushButton[keycap="true"][error="true"] {{ background: {ERROR_BG}; color: {ERROR_FG}; }}
 

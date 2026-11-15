@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushBu
 import context_menu
 import theme
 import win_frame
-from config import HOTKEY_ACTIONS, MENU_SHORTCUTS, Config, display_key
+from config import ESC_KEY, HOTKEY_ACTIONS, MENU_SHORTCUTS, Config, display_key
 from version import APP_NAME, BUILD, VERSION
 from widgets import CheckBox, Popover, Segmented, button, dim_label
 
@@ -147,6 +147,7 @@ class KeyCap(QPushButton):
     def set_key(self, portable: str) -> None:
         self.portable = portable
         self.setText(display_key(portable))
+        theme.set_flag(self, "empty", not portable)          # T104: "…" stays dim
 
     def natural_width(self) -> int:
         """Text + padding (8 px each side) + 2 px air each side, at least 64 px."""
@@ -205,12 +206,30 @@ class KeyCap(QPushButton):
         self.captured.emit(combo)
 
 
+# T49 (B2): the Hotkeys window in groups. A str = remappable action (config id),
+# a tuple = reference line (title, keys) — gestures and fixed keys, not remappable.
+GROUPS = (
+    ("Playback", ("play", "loop", "frame_next", "frame_prev", "sec_next", "sec_prev",
+                  "sec5_next", "sec5_prev", "go_start", "go_end",
+                  "mute", "volume_up", "volume_down")),
+    ("Edit", ("trim", "trim_in", "trim_out", "reset_trim", "crop", "reset_crop",
+              "undo", "redo",
+              ("Frames / Timecode", "Ctrl+Click ⌛"),
+              ("Frame-Exact Scrub", "Alt+Drag"))),
+    ("Export", ("fmt_mp4", "fmt_gif", "fmt_png", "fmt_copy",
+                "scale_1", "scale_2", "scale_3", "scale_4")),
+    ("View", ("fullscreen", (ESC_KEY[0], ESC_KEY[1]), "jump_playhead",
+              ("Resize Keeping Proportions", "Shift+Drag Edge"))),          # T44 / T106
+)
+
+
 class HotkeysPopover(Popover):
     """T29: width follows the content (16 px at the sides and between the columns),
     all key caps as wide as the widest one, at most MAX_ROWS rows — then it scrolls."""
 
-    MAX_ROWS = 20
+    MAX_ROWS = 20            # visible height = 20 key rows (~ the RMB menu), then it scrolls
     ROW_SPACING = 6
+    GROUP_GAP = 14           # T49: air above a group header
 
     def __init__(self, config: Config, parent=None):
         super().__init__("Hotkeys", parent)
@@ -224,25 +243,33 @@ class HotkeysPopover(Popover):
         grid.setHorizontalSpacing(theme.GAP2)
         grid.setVerticalSpacing(self.ROW_SPACING)
         self.caps: dict[str, KeyCap] = {}
-        for row, action in enumerate(HOTKEY_ACTIONS):
-            grid.addWidget(QLabel(action.title), row, 0)
-            cap = KeyCap()
-            cap.captured.connect(lambda combo, a=action.id: self._assign(a, combo))
-            grid.addWidget(cap, row, 1, Qt.AlignmentFlag.AlignRight)
-            self.caps[action.id] = cap
-        # Reference only: frames mode is a Ctrl+click, not a reassignable key.
-        row = len(HOTKEY_ACTIONS)
-        self._refs = []
-        for title, keys in (("Frames / Timecode", "Ctrl+Click ⌛"),
-                            ("Frame-Exact Scrub", "Alt+Drag"),
-                            ("Resize with Video Aspect", "Shift+Drag Edge")):   # T44
-            grid.addWidget(QLabel(title), row, 0)
-            ref = dim_label(keys)
-            ref.setAlignment(Qt.AlignmentFlag.AlignCenter)       # centered like the key caps
-            grid.addWidget(ref, row, 1, Qt.AlignmentFlag.AlignRight)
-            self._refs.append(ref)
+        self._refs: list[QLabel] = []
+        self._headers: list[QLabel] = []
+        titles = {a.id: a.title for a in HOTKEY_ACTIONS}
+        row = 0
+        for group, items in GROUPS:
+            if row:
+                grid.setRowMinimumHeight(row, self.GROUP_GAP - self.ROW_SPACING)
+                row += 1
+            header = dim_label(group)                        # T49: grey group header
+            grid.addWidget(header, row, 0, 1, 2)
+            self._headers.append(header)
             row += 1
-        self._rows = row
+            for item in items:
+                if isinstance(item, tuple):                  # reference: not a key
+                    title, keys = item
+                    grid.addWidget(QLabel(title), row, 0)
+                    ref = dim_label(keys)
+                    ref.setAlignment(Qt.AlignmentFlag.AlignCenter)   # centred like the caps
+                    grid.addWidget(ref, row, 1, Qt.AlignmentFlag.AlignRight)
+                    self._refs.append(ref)
+                else:
+                    grid.addWidget(QLabel(titles[item]), row, 0)
+                    cap = KeyCap()
+                    cap.captured.connect(lambda combo, a=item: self._assign(a, combo))
+                    grid.addWidget(cap, row, 1, Qt.AlignmentFlag.AlignRight)
+                    self.caps[item] = cap
+                row += 1
 
         self.scroll = QScrollArea()
         self.scroll.setObjectName("HotkeysScroll")
@@ -277,17 +304,19 @@ class HotkeysPopover(Popover):
         self.refresh()
 
     def _fit(self) -> None:
-        """Caps share the widest width; the list shows at most MAX_ROWS rows."""
+        """Caps share the widest width; at most MAX_ROWS key rows of height, then scroll.
+        T68: reference lines are as tall as a key row — same air as the other rows."""
         widest = max(cap.natural_width() for cap in self.caps.values())
-        widest = max([widest] + [ref.sizeHint().width() for ref in self._refs])
+        widest = max([widest] + [ref.sizeHint().width() + 20 for ref in self._refs])
+        row_h = max(cap.sizeHint().height() for cap in self.caps.values())
         for cap in self.caps.values():
             cap.setFixedWidth(widest)
         for ref in self._refs:
-            ref.setFixedWidth(widest)
-        row_h = max(cap.sizeHint().height() for cap in self.caps.values())
-        rows = min(self._rows, self.MAX_ROWS)
-        visible = rows * row_h + (rows - 1) * self.ROW_SPACING
-        scrolls = self._rows > self.MAX_ROWS
+            ref.setFixedSize(widest, row_h)
+        visible = self.MAX_ROWS * row_h + (self.MAX_ROWS - 1) * self.ROW_SPACING
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._content.adjustSize()
+        scrolls = self._content.sizeHint().height() > visible
         # keys ↔ scrollbar: the same 16 px as between the columns
         self._grid.setContentsMargins(0, 0, theme.GAP2 if scrolls else 0, 0)
         self._content.adjustSize()

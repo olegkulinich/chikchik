@@ -55,6 +55,7 @@ HOTKEY_ACTIONS = (
     HotkeyAction("volume_up", "Volume Up", "Up"),            # T66: a focused field keeps ↑/↓
     HotkeyAction("volume_down", "Volume Down", "Down"),      # T66
     HotkeyAction("fullscreen", "Fullscreen", "F"),           # T22
+    HotkeyAction("jump_playhead", "Jump to Playhead", "/"),  # T50: physical key (RU types ".")
     # Key N = 1/N; 0.75x has no key (menu only).
     HotkeyAction("scale_1", "Scale 1x", "1"),
     HotkeyAction("scale_2", "Scale 0.5x", "2"),
@@ -102,9 +103,12 @@ UI_MODES = ("normal", "minimal", "hidden")
 _ARROWS = {"Left": "←", "Right": "→", "Up": "↑", "Down": "↓"}
 
 
+EMPTY_KEY = "…"           # T104 (B2): like PureRef — "—" read as a minus
+
+
 def display_key(portable: str) -> str:
     if not portable:
-        return "—"
+        return EMPTY_KEY
     text = QKeySequence(portable).toString(QKeySequence.SequenceFormat.NativeText)
     parts = text.split("+")
     return "+".join(_ARROWS.get(p, p) for p in parts) if parts else text
