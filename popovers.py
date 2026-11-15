@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QKeyEvent, QKeySequence
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QWidget)
 
@@ -11,7 +11,7 @@ import theme
 import win_frame
 from config import ESC_KEY, HOTKEY_ACTIONS, MENU_SHORTCUTS, Config, display_key
 from version import APP_NAME, BUILD, VERSION
-from widgets import CheckBox, Popover, Segmented, button, dim_label
+from widgets import CheckBox, Popover, Segmented, button, dim_label, portable_combo
 
 
 class SettingsPopover(Popover):
@@ -20,6 +20,7 @@ class SettingsPopover(Popover):
 
     def __init__(self, config: Config, parent=None):
         super().__init__("Settings", parent)
+        self.pos_name = "settings"
         self.toggle_keys = (MENU_SHORTCUTS["settings"][1],)          # 9a: Ctrl+K closes too
         self.config = config
         self._encoder_titles: list[QLabel] = []
@@ -198,9 +199,7 @@ class KeyCap(QPushButton):
             theme.set_flag(self, "capturing", False)
             self.captured.emit("")
             return
-        combo = QKeySequence(event.keyCombination()).toString(
-            QKeySequence.SequenceFormat.PortableText
-        )
+        combo = portable_combo(event)          # B2-2b: "Щ" → "O" (physical key)
         self.capturing = False
         theme.set_flag(self, "capturing", False)
         self.captured.emit(combo)
@@ -229,10 +228,10 @@ class HotkeysPopover(Popover):
 
     MAX_ROWS = 20            # visible height = 20 key rows (~ the RMB menu), then it scrolls
     ROW_SPACING = 6
-    GROUP_GAP = 14           # T49: air above a group header
 
     def __init__(self, config: Config, parent=None):
         super().__init__("Hotkeys", parent)
+        self.pos_name = "hotkeys"
         self.toggle_keys = (MENU_SHORTCUTS["hotkeys"][1],)           # 9a: Ctrl+/ closes too
         self.toggle_scan = win_frame.SCAN_SLASH if win_frame.ENABLED else None   # …on RU too
         self.config = config
@@ -248,8 +247,11 @@ class HotkeysPopover(Popover):
         titles = {a.id: a.title for a in HOTKEY_ACTIONS}
         row = 0
         for group, items in GROUPS:
-            if row:
-                grid.setRowMinimumHeight(row, self.GROUP_GAP - self.ROW_SPACING)
+            if row:                                          # B2-2b: thin line between
+                line = QFrame()                              # groups, like the RMB menu
+                line.setFixedHeight(1)                       # (6 px air above and below)
+                line.setStyleSheet(f"background: {theme.STROKE};")
+                grid.addWidget(line, row, 0, 1, 2)
                 row += 1
             header = dim_label(group)                        # T49: grey group header
             grid.addWidget(header, row, 0, 1, 2)

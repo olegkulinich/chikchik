@@ -215,6 +215,18 @@ class Config(QObject):
                              [p for p in self.recent() if p.lower() != path.lower()])
 
     # --- window
+    def popover_offset(self, name: str) -> tuple[int, int] | None:
+        """B2-2b: where the user dragged a popover — offset of its centre from the
+        video centre (remembered between launches). None = never moved → centred."""
+        try:
+            x, y = str(self._store.value(f"ui/popover_{name}", "")).split(",")
+            return int(x), int(y)
+        except ValueError:
+            return None
+
+    def set_popover_offset(self, name: str, x: int, y: int) -> None:
+        self._store.setValue(f"ui/popover_{name}", f"{x},{y}")
+
     def ui_mode(self) -> str:
         """T27: normal | minimal (Minimize UI) | hidden (Hide UI) — remembered."""
         value = str(self._store.value("window/ui_mode", "normal"))

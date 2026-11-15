@@ -105,6 +105,9 @@ def main() -> int:
     app.setApplicationName("ChikChik")
     app.setOrganizationName("ChikChik")
     app.setApplicationVersion(VERSION)
+    # B2-2b: tooltips appear at once — no slide-down / fade (it flickered)
+    app.setEffectEnabled(Qt.UIEffect.UI_AnimateTooltip, False)
+    app.setEffectEnabled(Qt.UIEffect.UI_FadeTooltip, False)
     locale.setlocale(locale.LC_NUMERIC, "C")   # required by libmpv
     startup_log.mark("QApplication created")
     startup_log.cpu("QApplication created")
