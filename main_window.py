@@ -2309,8 +2309,12 @@ class MainWindow(QMainWindow):
 
     def nativeEvent(self, event_type, message):  # noqa: N802
         msg = win_frame.message(event_type, message) if not self._fullscreen else None
-        if msg is not None and msg[0] == win_frame.WM_SIZING and win_frame.shift_down():
-            if self._keep_aspect(int(msg[2]), msg[3]):                # T44
+        if msg is not None and msg[0] in (win_frame.WM_ENTERSIZEMOVE, win_frame.WM_EXITSIZEMOVE):
+            self._sizing_aspect = None                                # T106: a new drag
+        if msg is not None and msg[0] == win_frame.WM_SIZING:
+            if not win_frame.shift_down():
+                self._sizing_aspect = None                            # Shift up → taken again
+            elif self._keep_aspect(int(msg[2]), msg[3]):              # T44
                 return True, 1
         if self._frame_hidden and not self._fullscreen:
             if msg is not None:
@@ -2344,10 +2348,15 @@ class MainWindow(QMainWindow):
         return dw / dh if dw and dh else None
 
     def _keep_aspect(self, edge: int, lparam) -> bool:
-        """T44: Shift while dragging an edge/corner keeps the video's proportions
-        (like Photoshop). Works in physical px — WM_SIZING's RECT is the native window
+        """T44: Shift while dragging an edge/corner keeps the proportions (like
+        Photoshop) — T106: the video area's current ones, not the picture's. Works in physical px — WM_SIZING's RECT is the native window
         rect, so the window's own size is taken from Windows too (not Qt's frame)."""
-        aspect = self._video_aspect()
+        if getattr(self, "_sizing_aspect", None) is None:
+            # T106: the proportions of the moment Shift went down (or the drag began
+            # with it held) — the window never jumps to the video's aspect by itself
+            self._sizing_aspect = win_frame.drag_aspect(
+                self.video.width(), self.video.height(), self._video_aspect())
+        aspect = self._sizing_aspect
         native = win_frame.window_size(self.winId())
         if aspect is None or native is None:
             return False

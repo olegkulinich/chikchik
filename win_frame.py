@@ -161,6 +161,20 @@ def sizing_rect(lparam):
     return wintypes.RECT.from_address(int(lparam))
 
 
+WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE = 0x0231, 0x0232
+
+
+def drag_aspect(video_w: int, video_h: int, video_aspect: float | None) -> float | None:
+    """T106 (B2): the proportions Shift keeps = the video area as it is right now (no
+    jump on the first move). If that area already fits the picture (± 2 px rounding,
+    e.g. after Ctrl+Shift+R), the picture's exact aspect — no drift."""
+    if video_w <= 0 or video_h <= 0:
+        return video_aspect
+    if video_aspect and abs(video_w - video_h * video_aspect) <= 2:
+        return video_aspect
+    return video_w / video_h
+
+
 def keep_aspect(rect, edge: int, extra_w: int, extra_h: int, aspect: float,
                 min_w: int, min_h: int, max_w: int, max_h: int) -> None:
     """T44: change the dragged RECT so the video area (window minus `extra`) keeps
