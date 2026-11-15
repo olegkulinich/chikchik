@@ -37,19 +37,25 @@ def button(text: str = "", checkable: bool = False, tooltip: str = "") -> QPushB
     return b
 
 
+KEY_GAP = 6     # B2-2b: name → key in tooltips (user sketch; was 16 like the menu)
+
+
 def key_tip(text: str, key: str, note: str = "") -> str:
-    """T48 (B2): tooltip with its key grey at the line end, 16 px from the text (like
-    the RMB menu). B2-2b: never wraps; an optional `note` = one more line below
-    (so a tooltip is at most 2 lines). No key and no note → plain text."""
+    """T48 (B2): tooltip with its key grey after the name. B2-2b (user sketch): key
+    KEY_GAP after the name, never wraps, optional grey `note` = 2nd line (at most 2
+    lines). No key and no note → plain text."""
     if not key and not note:
         return text
     cell = f'<td nowrap>{html.escape(text)}</td>'
     if key:
-        cell += (f'<td nowrap style="padding-left: {theme.GAP2}px; color: {theme.DIM};">'
+        cell += (f'<td nowrap style="padding-left: {KEY_GAP}px; color: {theme.DIM};">'
                  f'{html.escape(key).replace(" ", "&nbsp;")}</td>')
-    rows = f'<tr>{cell}</tr>'
-    if note:
-        rows += f'<tr><td nowrap colspan="2">{html.escape(note)}</td></tr>'
+    line = f'<table cellspacing="0" cellpadding="0"><tr>{cell}</tr></table>'
+    if not note:
+        return line
+    # own table for the name + key line: a long note can't push the key to the right
+    rows = (f'<tr><td nowrap>{line}</td></tr>'
+            f'<tr><td nowrap style="color: {theme.DIM};">{html.escape(note)}</td></tr>')
     return f'<table cellspacing="0" cellpadding="0">{rows}</table>'
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QWidget)
+                               QScrollArea, QVBoxLayout, QWidget)
 
 import context_menu
 import theme
@@ -228,6 +228,7 @@ class HotkeysPopover(Popover):
 
     MAX_ROWS = 20            # visible height = 20 key rows (~ the RMB menu), then it scrolls
     ROW_SPACING = 6
+    LINE_AIR = 16            # B2-2b: air above and below a group line
 
     def __init__(self, config: Config, parent=None):
         super().__init__("Hotkeys", parent)
@@ -248,10 +249,15 @@ class HotkeysPopover(Popover):
         row = 0
         for group, items in GROUPS:
             if row:                                          # B2-2b: thin line between
-                line = QFrame()                              # groups, like the RMB menu
-                line.setFixedHeight(1)                       # (6 px air above and below)
+                gap = QWidget()                              # groups, like the RMB menu;
+                lay = QVBoxLayout(gap)                       # 16 px air above and below
+                pad = self.LINE_AIR - self.ROW_SPACING       # (row spacing counts too)
+                lay.setContentsMargins(0, pad, 0, pad)
+                line = QFrame()
+                line.setFixedHeight(1)
                 line.setStyleSheet(f"background: {theme.STROKE};")
-                grid.addWidget(line, row, 0, 1, 2)
+                lay.addWidget(line)
+                grid.addWidget(gap, row, 0, 1, 2)
                 row += 1
             header = dim_label(group)                        # T49: grey group header
             grid.addWidget(header, row, 0, 1, 2)
