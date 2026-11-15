@@ -1080,6 +1080,25 @@ def hwdec_for(info: MediaInfo | None, env=os.environ, cpus: int | None = None) -
     return "auto-copy"
 
 
+# E4 build 2: intra-only sources (ProRes, PNG sequences…) open sooner with 4 decoder
+# threads than with mpv's auto (one per core): bench 2026-11-15 — 2160² ProRes −53 ms,
+# sequence −21 ms to the first frame; long-GOP H.264 got slower (+46 ms) → intra only.
+INTRA_THREADS = 4
+
+
+def decoder_options(info: MediaInfo | None, env=os.environ, cpus: int | None = None) -> str:
+    """Per-file loadfile options for the decoder ("hwdec=no,vd-lavc-threads=4"), "" = the
+    global defaults. vd-lavc-threads in QTC_MPV_OPTS turns the thread choice off."""
+    parts = []
+    hwdec = hwdec_for(info, env, cpus)
+    if hwdec:
+        parts.append(f"hwdec={hwdec}")
+    if (info is not None and info.intra_only and "vd_lavc_threads" not in mpv_opts_env(env)
+            and (cpus or os.cpu_count() or 1) > INTRA_THREADS):
+        parts.append(f"vd-lavc-threads={INTRA_THREADS}")
+    return ",".join(parts)
+
+
 class Probe:
     """E2 (55c): ffprobe in a background thread, started before the window is built.
 

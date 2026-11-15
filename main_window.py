@@ -70,7 +70,7 @@ from backend import (
     normalize_crop,
     palette_path,
     png_pattern,
-    hwdec_for,
+    decoder_options,
     probe_media,
     same_path,
     scaled_size,
@@ -592,10 +592,10 @@ class MainWindow(QMainWindow):
         if self._preload is not None:
             probe = self._probe
 
-            def decoder() -> str | None:          # asked when the preload loadfile goes
+            def decoder() -> str:                 # asked when the preload loadfile goes
                 info = probe.peek() if probe is not None else None
                 startup_log.mark(f"probe ready at preload: {'yes' if info else 'no'}")
-                return hwdec_for(info)
+                return decoder_options(info)
 
             self.video.preload(self._preload, autoplay=self.config.flag("autoplay"),
                                decoder=decoder)
@@ -1083,7 +1083,7 @@ class MainWindow(QMainWindow):
                         autoplay=autoplay,                                 # T35
                         frame_duration=info.frame_duration,
                         sequence_fps=info.fps if sequence is not None else None,
-                        hwdec=hwdec_for(info))                             # E4 (T97)
+                        decoder=decoder_options(info))                     # E4
         startup_log.mark("video.load returned")
         if keep is None:
             start_format = self.config.start_format()                      # T25

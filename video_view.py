@@ -24,16 +24,6 @@ def _gl_renderer() -> str:
         return f"? ({exc.__class__.__name__})"
 
 
-def _shader_cache_dir() -> str:
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.cache")
-    path = os.path.join(base, "ChikChik", "shader-cache")
-    try:
-        os.makedirs(path, exist_ok=True)
-    except OSError:
-        pass
-    return path
-
-
 def _silence_minutes() -> float:
     """E3 (T93): minutes of pause with the audio device kept awake (QTC_SILENCE_MIN)."""
     try:
@@ -70,6 +60,10 @@ class VideoView(QOpenGLWidget):
             keep_open="yes",
             hr_seek="yes",
             hwdec="auto-copy",
+            # E4 build 2: no GPU interop — the -copy decoders hand frames back to the CPU, and
+            # loading the interops (d3d11va, dxva2, cuda, vulkan…) cost ~65 ms of the render
+            # context (bench 2026-11-15: window −70 ms, first frame −80 ms).
+            gpu_hwdec_interop="no",
             osc=False,
             input_default_bindings=False,
             input_vo_keyboard=False,
@@ -87,8 +81,6 @@ class VideoView(QOpenGLWidget):
         from backend import mpv_opts_env
 
         extra = mpv_opts_env()
-        if os.environ.get("QTC_SHADER_CACHE") == "1":     # E4 experiment: GL program cache
-            extra.setdefault("gpu_shader_cache_dir", _shader_cache_dir())
         options.update(extra)
         # E3 (T93): the silence keeps a SYSTEM power request (blocks automatic sleep), so
         # it is fed only for the first QTC_SILENCE_MIN minutes of a pause (default 10).
@@ -109,10 +101,10 @@ class VideoView(QOpenGLWidget):
         try:
             self.player = mpv.MPV(**trace, **options)
         except Exception as exc:     # a typo in QTC_MPV_OPTS must not stop the app
-            if not extra:
+            if not extra and "gpu_hwdec_interop" not in options:
                 raise
             startup_log.mark(f"mpv options rejected ({exc.__class__.__name__}), extras dropped")
-            for name in extra:
+            for name in [*extra, "gpu_hwdec_interop"]:    # E4: an older libmpv may not know it
                 options.pop(name, None)
             self.player = mpv.MPV(**trace, **options)
         startup_log.mark("mpv core created")
@@ -483,7 +475,7 @@ class VideoView(QOpenGLWidget):
         same path then skips its loadfile. mpv drops the video track if the file opens
         before the render context exists, so the loadfile waits for initializeGL."""
         self._preloaded = str(path)
-        self._preload_decoder = decoder      # E4 (T97): () -> hwdec or None, asked at send
+        self._preload_decoder = decoder      # E4: () -> decoder loadfile options, asked at send
         self._preload_waiting = True
         self._set("pause", not autoplay)
         self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
@@ -497,10 +489,10 @@ class VideoView(QOpenGLWidget):
     def _send_preload(self) -> None:
         if self._preload_waiting and self._preloaded is not None:
             self._preload_waiting = False
-            hwdec = self._preload_decoder() if self._preload_decoder else None
-            startup_log.mark(f"decoder (preload): {hwdec or 'default'}")
+            decoder = self._preload_decoder() if self._preload_decoder else ""
+            startup_log.mark(f"decoder (preload): {decoder or 'default'}")
             startup_log.mark("mpv: loadfile sent (preload)", once=True)
-            self._loadfile(self._preloaded, f"hwdec={hwdec}" if hwdec else "")
+            self._loadfile(self._preloaded, decoder or "")
 
     def cancel_preload(self) -> None:
         if self._preloaded is not None:
@@ -513,9 +505,10 @@ class VideoView(QOpenGLWidget):
     def load(self, path: Path | str, frame_size: tuple[int, int], aid: int | None,
              sid: int | None = None, autoplay: bool = True,
              frame_duration: float | None = None, sequence_fps: float | None = None,
-             hwdec: str | None = None) -> None:
-        """`path` may be an mpv URL (T36: mf://@list for an image sequence). `hwdec`
-        (E4, T97): per-file decoder, None = the global default."""
+             decoder: str = "") -> None:
+        """`path` may be an mpv URL (T36: mf://@list for an image sequence). `decoder`
+        (E4): per-file decoder loadfile options ("hwdec=no,vd-lavc-threads=4"), "" = the
+        global defaults."""
         self.frame_size = frame_size
         self.frame_duration_s = frame_duration
         self.has_video = True
@@ -539,11 +532,10 @@ class VideoView(QOpenGLWidget):
             self.set_audio(aid)          # mpv was idle before the preload: plain sets hold
             self.set_subtitle(sid)
         else:
-            startup_log.mark(f"decoder: {hwdec or 'default'}")
+            startup_log.mark(f"decoder: {decoder or 'default'}")
             startup_log.mark("mpv: loadfile sent", once=True)
             tracks = f"aid={aid if aid else 'no'},sid={sid if sid else 'no'}"
-            self._loadfile(str(path), tracks + (f",hwdec={hwdec}" if hwdec else ""),
-                           aid, sid)
+            self._loadfile(str(path), tracks + (f",{decoder}" if decoder else ""), aid, sid)
         self._preloaded = None
         self._preload_waiting = False
         self._set("pause", paused)
