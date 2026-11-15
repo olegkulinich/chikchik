@@ -45,6 +45,9 @@ HOTKEY_ACTIONS = (
     HotkeyAction("sec5_prev", "Jump Backward 5 sec", "Shift+Left"),
     HotkeyAction("play", "Play/Pause", "Space"),
     HotkeyAction("loop", "Loop", "Shift+L"),                 # T21; T65 (was L)
+    HotkeyAction("jkl_back", "Play Backward (hold)", "J"),   # T67: hold → speed ramps
+    HotkeyAction("jkl_stop", "Pause", "K"),                  # T67
+    HotkeyAction("jkl_forward", "Play Forward (hold)", "L"), # T67
     HotkeyAction("go_start", "Go to Start", "Home"),         # T41
     HotkeyAction("go_end", "Go to End", "End"),              # T41
     HotkeyAction("undo", "Undo", "Ctrl+Z"),                  # T32

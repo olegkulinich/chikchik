@@ -217,7 +217,7 @@ class Twice(tuple):
 # a tuple = reference line (title, keys) — gestures and fixed keys, not remappable;
 # a Twice = reference line built from another action's key.
 GROUPS = (
-    ("Playback", ("play", "loop", "frame_next", "frame_prev", "sec_next", "sec_prev",
+    ("Playback", ("play", "loop", "jkl_back", "jkl_stop", "jkl_forward", "frame_next", "frame_prev", "sec_next", "sec_prev",
                   "sec5_next", "sec5_prev", "go_start", "go_end",
                   "mute", "volume_up", "volume_down")),
     ("Edit", ("trim", "trim_in", "trim_out", Twice("Reset Trim", "trim"),

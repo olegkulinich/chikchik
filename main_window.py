@@ -816,6 +816,22 @@ class MainWindow(QMainWindow):
         if kind == QEvent.Type.Resize and obj is getattr(self, "_central", None):
             self._place_overlay()
         in_window = isinstance(obj, QWidget) and obj.window() is self
+        if self._jkl is not None and kind == QEvent.Type.WindowDeactivate and obj is self:
+            self._jkl_end()                 # T67: the release would never come
+        if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress,
+                                  QEvent.Type.KeyRelease) and self._jkl_keys \
+                and not isinstance(QApplication.focusWidget(), QLineEdit):
+            action_id = self._jkl_key(event, any_mods=kind == QEvent.Type.KeyRelease)
+            if action_id:
+                # T67: hold J / L — press starts, autorepeat is swallowed, release ends
+                if not event.isAutoRepeat():
+                    if kind == QEvent.Type.KeyPress:
+                        self._jkl_start(action_id)
+                    elif kind == QEvent.Type.KeyRelease and self._jkl is not None \
+                            and self._jkl["action"] == action_id:
+                        self._jkl_end()
+                event.accept()
+                return True
         if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
                 and event.modifiers() == Qt.KeyboardModifier.ControlModifier \
                 and win_frame.is_slash_key(event):
@@ -892,6 +908,7 @@ class MainWindow(QMainWindow):
             "sec5_next": lambda: self.video.seek_relative(5.0),
             "sec5_prev": lambda: self.video.seek_relative(-5.0),
             "play": self.toggle_play,
+            "jkl_stop": self._jkl_stop,                                   # T67
             "loop": lambda: self.loop_button.toggle() if self.info is not None else None,
             "fullscreen": self.toggle_fullscreen,                         # T22
             "jump_playhead": self.jump_to_playhead,                       # T50
@@ -910,8 +927,12 @@ class MainWindow(QMainWindow):
         for action_id, fmt in FORMAT_HOTKEYS.items():                   # T37
             handlers[action_id] = lambda f=fmt: self.set_format(f, explain=True) \
                 if self._editable() else None
+        self._jkl_keys = {}
         for action_id, key in self.config.hotkeys().items():
             if not key:
+                continue
+            if action_id in self.JKL_HOLD:          # T67: needs the release → eventFilter
+                self._jkl_keys[action_id] = QKeySequence(key)
                 continue
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -950,6 +971,159 @@ class MainWindow(QMainWindow):
     def _escape(self) -> None:
         if self._fullscreen:
             self.toggle_fullscreen()
+
+    # ============================================================ JKL (T67)
+    # Hold L → play forward 1×, ×2 every step while held (up to MAX); release → back to
+    # what it was: paused stays paused (on the frame on screen), playing plays on at 1×.
+    # J the same backward: mpv's own backward playback on intra-only files, exact seeks
+    # (latest wins) on long-GOP ones — mpv stalls there — and whenever Loop is on. K = pause.
+    # Hidden switches: QTC_JKL_BACK=auto|mpv|seek, QTC_JKL_STEP_MS (500), QTC_JKL_MAX (8).
+    JKL_HOLD = ("jkl_back", "jkl_forward")
+    JKL_TICK_MS = 40                      # backward by seeks: a new target 25× a second
+    _jkl: dict | None = None
+    _jkl_keys: dict = {}
+
+    @staticmethod
+    def _env_number(name: str, default: float, low: float, high: float) -> float:
+        try:
+            return max(low, min(high, float(os.environ.get(name, default))))
+        except ValueError:
+            return default
+
+    def _jkl_key(self, event, any_mods: bool = False) -> str:
+        """The hold action of this key event, or ''. Letters by the physical key too
+        (Windows virtual-key = Latin letter on any layout: Д is still L)."""
+        def code(k) -> int:
+            return int(getattr(k, "value", k))
+        keys = {code(event.key())}
+        if win_frame.ENABLED:
+            vk = event.nativeVirtualKey()
+            if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:       # == Qt.Key_0…9 / A…Z
+                keys.add(vk)
+        mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        for action_id, seq in self._jkl_keys.items():
+            if seq.count() != 1:
+                continue
+            combo = seq[0]
+            if code(combo.key()) in keys and (any_mods or combo.keyboardModifiers() == mods):
+                return action_id
+        return ""
+
+    def _jkl_back_mode(self) -> str:
+        """Loop on → always by seeks: mpv's backward wrap to the end of the file stalls
+        (0.37: on the last 1–3 frames, on long-GOP at any margin)."""
+        mode = os.environ.get("QTC_JKL_BACK", "auto").strip().lower()
+        if self.loop_button.isChecked() or mode == "seek":
+            return "seek"
+        if mode == "mpv":
+            return mode
+        return "mpv" if self.info is not None and self.info.intra_only else "seek"
+
+    def _jkl_seeking(self) -> bool:
+        return self._jkl is not None and self._jkl["mode"] == "seek"
+
+    def _jkl_start(self, action_id: str) -> None:
+        if self.info is None or not self.video.has_video:
+            return
+        was_playing = self.video.playing
+        if self._jkl is not None:                     # J ↔ L while holding: switch over
+            was_playing = self._jkl["was_playing"]
+            self._jkl_end(resume=False)
+        backward = action_id == "jkl_back"
+        mode = self._jkl_back_mode() if backward else "forward"
+        self._jkl = {"action": action_id, "mode": mode, "speed": 1.0,
+                     "was_playing": was_playing}
+        if mode == "seek":
+            self.video.pause()
+            self._jkl["pos"] = self._position()
+            self._jkl["stamp"] = time.monotonic()
+            self._jkl_tick_timer().start()
+        else:
+            self.video.set_speed(1.0)
+            self.video.set_backward(mode == "mpv")
+            self.video.play()
+        step = int(self._env_number("QTC_JKL_STEP_MS", 500, 100, 5000))
+        self._jkl_ramp_timer().start(step)
+        self._jkl_show()
+
+    def _jkl_ramp(self) -> None:
+        if self._jkl is None:
+            return
+        top = self._env_number("QTC_JKL_MAX", 8, 1, 64)
+        speed = min(top, self._jkl["speed"] * 2)
+        if speed == self._jkl["speed"]:
+            self._jkl_ramp_timer().stop()
+            return
+        self._jkl["speed"] = speed
+        if self._jkl["mode"] != "seek":
+            self.video.set_speed(speed)
+        self._jkl_show()
+
+    def _jkl_show(self) -> None:
+        """Speed toast while held; sound only forward up to 2× (pitch-corrected by mpv)."""
+        state = self._jkl
+        backward = state["mode"] != "forward"
+        self.toast.show_message(f"{'−' if backward else ''}{state['speed']:g}×",
+                                action=False, ms=60000)
+        self.video.set_mute(self._muted or backward or state["speed"] > 2)
+
+    def _jkl_tick(self) -> None:
+        """Backward by seeks: the target runs back in real time × speed; the seek queue
+        keeps only the latest target, so a slow decoder skips frames instead of lagging."""
+        state = self._jkl
+        if state is None or state["mode"] != "seek":
+            return
+        now = time.monotonic()
+        pos = state["pos"] - state["speed"] * (now - state["stamp"])
+        state["stamp"] = now
+        if self.loop_button.isChecked():
+            start, length = self._trim_range()
+            if pos < start:
+                pos += length                             # like mpv's ab-loop backward
+        pos = max(0.0, pos)
+        if pos != state["pos"]:                          # at 0 (no loop): nothing to send
+            state["pos"] = pos
+            self.video.seek(pos, True)
+
+    def _jkl_end(self, resume: bool = True) -> None:
+        """Release: the frame on screen stays; it was playing → plays on forward at 1×."""
+        state, self._jkl = self._jkl, None
+        if state is None:
+            return
+        self._jkl_ramp_timer().stop()
+        self._jkl_tick_timer().stop()
+        self.toast.hide()
+        if state["mode"] == "seek":
+            self.video.drop_pending_seek()
+        else:
+            if not (resume and state["was_playing"]):
+                self.video.pause()                         # pause first: frame on screen
+            self.video.set_backward(False)
+        self.video.set_speed(1.0)
+        self.video.set_mute(self._muted)
+        if resume and state["was_playing"]:
+            self.video.play()
+
+    def _jkl_stop(self) -> None:
+        """K: pause, speed back to 1×."""
+        if self._jkl is not None:
+            self._jkl["was_playing"] = False
+            self._jkl_end()
+        else:
+            self.video.pause()
+
+    def _jkl_ramp_timer(self) -> QTimer:
+        if not hasattr(self, "_jkl_ramp_t"):
+            self._jkl_ramp_t = QTimer(self)
+            self._jkl_ramp_t.timeout.connect(self._jkl_ramp)
+        return self._jkl_ramp_t
+
+    def _jkl_tick_timer(self) -> QTimer:
+        if not hasattr(self, "_jkl_tick_t"):
+            self._jkl_tick_t = QTimer(self)
+            self._jkl_tick_t.setInterval(self.JKL_TICK_MS)
+            self._jkl_tick_t.timeout.connect(self._jkl_tick)
+        return self._jkl_tick_t
 
     # ============================================================ sound (T66)
     VOLUME_STEP = 5
@@ -1139,6 +1313,8 @@ class MainWindow(QMainWindow):
         """`probe` (E2, 55c): an ffprobe already running in a thread (`backend.Probe`)."""
         if self.worker is not None:
             return
+        if self._jkl is not None:
+            self._jkl_end()
         path = path.expanduser().resolve()
         try:
             if probe is not None:
@@ -1266,7 +1442,7 @@ class MainWindow(QMainWindow):
         position = self.video.time_pos
         if position is None:
             return
-        if self.timeline.is_dragging() or self.video.seek_busy():
+        if self.timeline.is_dragging() or (self.video.seek_busy() and not self._jkl_seeking()):
             # The playhead follows the mouse / the requested target, not mpv: while a
             # seek runs, mpv still reports the old position (made ⌛ scrub jitter, 4.1.1).
             return
