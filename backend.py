@@ -1093,10 +1093,17 @@ def decoder_options(info: MediaInfo | None, env=os.environ, cpus: int | None = N
     hwdec = hwdec_for(info, env, cpus)
     if hwdec:
         parts.append(f"hwdec={hwdec}")
-    if (info is not None and info.intra_only and "vd_lavc_threads" not in mpv_opts_env(env)
-            and (cpus or os.cpu_count() or 1) > INTRA_THREADS):
-        parts.append(f"vd-lavc-threads={INTRA_THREADS}")
-    return ",".join(parts)
+    if info is not None and info.intra_only:
+        parts.append(intra_threads_option(env, cpus))
+    return ",".join(p for p in parts if p)
+
+
+def intra_threads_option(env=os.environ, cpus: int | None = None) -> str:
+    """vd-lavc-threads for intra-only sources (ProRes, sequences…), "" = mpv's auto. Also
+    used for a sequence preloaded before its probe is done (T96: always intra-only)."""
+    if "vd_lavc_threads" in mpv_opts_env(env) or (cpus or os.cpu_count() or 1) <= INTRA_THREADS:
+        return ""
+    return f"vd-lavc-threads={INTRA_THREADS}"
 
 
 class Probe:
@@ -1110,6 +1117,9 @@ class Probe:
         self.path = path.expanduser().resolve()
         self._info: MediaInfo | None = None
         self._error: BaseException | None = None
+        # T96: the frame list, set by the thread before its ffprobe (a preload needs no
+        # more than the list) — read without waiting via `sequence`.
+        self.sequence: ImageSequence | None = None
         self._thread = threading.Thread(target=self._run, name="ffprobe", daemon=True)
         self._thread.start()
 
@@ -1119,6 +1129,7 @@ class Probe:
         try:
             if is_image(self.path):
                 sequence = find_sequence(self.path)        # E4 (T99): where seq time goes
+                self.sequence = sequence
                 startup_log.mark(f"probe thread: sequence listed, {len(sequence.files)} frames")
                 self._info = probe_sequence(sequence)
                 startup_log.mark("probe thread: sequence probed")
