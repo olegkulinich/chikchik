@@ -884,9 +884,7 @@ class MainWindow(QMainWindow):
         self._shortcuts = []
         handlers = {
             "trim": lambda: self.trim_button.toggle() if self._editable() else None,
-            "reset_trim": self.reset_trim,
             "crop": lambda: self.crop_button.toggle() if self._editable() else None,
-            "reset_crop": self.reset_crop,
             "frame_next": lambda: self.video.frame_step(False),
             "frame_prev": lambda: self.video.frame_step(True),
             "sec_next": lambda: self.video.seek_relative(1.0),
@@ -1398,14 +1396,6 @@ class MainWindow(QMainWindow):
             self.trim_in, self.trim_out = self._visible_range()
             self.timeline.set_trim_enabled(True)
 
-    def reset_trim(self) -> None:
-        if not self._editable():
-            return
-        self._history_flush()
-        self.trim_in, self.trim_out = 0.0, self.info.duration
-        self._show_times()
-        self._history_commit()
-
     def set_in(self, value: float, step: bool = True) -> None:
         if not self._editable():
             return
@@ -1801,15 +1791,6 @@ class MainWindow(QMainWindow):
             self._set_checked(self.crop_button, True)   # dragging on the video turns Crop on
             self.video.set_crop_enabled(True)
         self._reencode_changed("crop")
-        self._history_commit()
-
-    def reset_crop(self) -> None:
-        if self.info is None:
-            return
-        self._history_flush()
-        self.crop = self._full_frame()
-        self.video.set_crop(self.crop)
-        self._show_crop()
         self._history_commit()
 
     def _crop_field_committed(self, key: str, text: str) -> None:
