@@ -34,11 +34,9 @@ class HotkeyAction:
 
 HOTKEY_ACTIONS = (
     HotkeyAction("trim", "Trim", "T"),
-    HotkeyAction("reset_trim", "Reset Trim", "Ctrl+Shift+T"),   # T65 (was Shift+Esc)
     HotkeyAction("trim_in", "Trim In", "I"),
     HotkeyAction("trim_out", "Trim Out", "O"),
     HotkeyAction("crop", "Crop", "C"),
-    HotkeyAction("reset_crop", "Reset Crop", "Ctrl+Shift+C"),   # T65 (was Esc)
     HotkeyAction("frame_next", "Jump Forward 1 frame", "Right"),
     HotkeyAction("frame_prev", "Jump Backward 1 frame", "Left"),
     HotkeyAction("sec_next", "Jump Forward 1 sec", "Ctrl+Right"),

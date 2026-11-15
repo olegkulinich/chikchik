@@ -205,13 +205,23 @@ class KeyCap(QPushButton):
         self.captured.emit(combo)
 
 
+class Twice(tuple):
+    """B2-3: reference line "Reset Trim — T twice" that follows the action's current key
+    (hidden while that key is empty). Reset = toggle off and on again (T31)."""
+
+    def __new__(cls, title: str, action_id: str):
+        return super().__new__(cls, (title, action_id))
+
+
 # T49 (B2): the Hotkeys window in groups. A str = remappable action (config id),
-# a tuple = reference line (title, keys) — gestures and fixed keys, not remappable.
+# a tuple = reference line (title, keys) — gestures and fixed keys, not remappable;
+# a Twice = reference line built from another action's key.
 GROUPS = (
     ("Playback", ("play", "loop", "frame_next", "frame_prev", "sec_next", "sec_prev",
                   "sec5_next", "sec5_prev", "go_start", "go_end",
                   "mute", "volume_up", "volume_down")),
-    ("Edit", ("trim", "trim_in", "trim_out", "reset_trim", "crop", "reset_crop",
+    ("Edit", ("trim", "trim_in", "trim_out", Twice("Reset Trim", "trim"),
+              "crop", Twice("Reset Crop", "crop"),
               "undo", "redo",
               ("Frames / Timecode", "Ctrl+Click ⌛"),
               ("Frame-Exact Scrub", "Alt+Drag"))),
@@ -244,6 +254,7 @@ class HotkeysPopover(Popover):
         grid.setVerticalSpacing(self.ROW_SPACING)
         self.caps: dict[str, KeyCap] = {}
         self._refs: list[QLabel] = []
+        self._twice: list[tuple[str, QLabel, QLabel]] = []   # (action id, title, keys)
         self._headers: list[QLabel] = []
         titles = {a.id: a.title for a in HOTKEY_ACTIONS}
         row = 0
@@ -266,11 +277,14 @@ class HotkeysPopover(Popover):
             for item in items:
                 if isinstance(item, tuple):                  # reference: not a key
                     title, keys = item
-                    grid.addWidget(QLabel(title), row, 0)
-                    ref = dim_label(keys)
+                    label = QLabel(title)
+                    grid.addWidget(label, row, 0)
+                    ref = dim_label("" if isinstance(item, Twice) else keys)
                     ref.setAlignment(Qt.AlignmentFlag.AlignCenter)   # centred like the caps
                     grid.addWidget(ref, row, 1, Qt.AlignmentFlag.AlignRight)
                     self._refs.append(ref)
+                    if isinstance(item, Twice):              # text set in refresh()
+                        self._twice.append((keys, label, ref))
                 else:
                     grid.addWidget(QLabel(titles[item]), row, 0)
                     cap = KeyCap()
@@ -315,7 +329,10 @@ class HotkeysPopover(Popover):
         """Caps share the widest width; at most MAX_ROWS key rows of height, then scroll.
         T68: reference lines are as tall as a key row — same air as the other rows."""
         widest = max(cap.natural_width() for cap in self.caps.values())
-        widest = max([widest] + [ref.sizeHint().width() + 20 for ref in self._refs])
+        # text width from the font: a fixed-size QLabel keeps a stale sizeHint after
+        # setText (B2-3: "Shift+X twice" → "T twice" would leave the column wide)
+        widest = max([widest] + [ref.fontMetrics().horizontalAdvance(ref.text()) + 20
+                                 for ref in self._refs if not ref.isHidden()])
         row_h = max(cap.sizeHint().height() for cap in self.caps.values())
         for cap in self.caps.values():
             cap.setFixedWidth(widest)
@@ -336,6 +353,11 @@ class HotkeysPopover(Popover):
     def refresh(self) -> None:
         for action_id, cap in self.caps.items():
             cap.set_key(self.config.hotkey(action_id))
+        for action_id, label, ref in self._twice:            # B2-3: follows remapping
+            key = self.config.hotkey(action_id)
+            ref.setText(f"{display_key(key)} twice" if key else "")
+            label.setHidden(not key)
+            ref.setHidden(not key)
         self._fit()
 
     def _assign(self, action_id: str, combo: str) -> None:
