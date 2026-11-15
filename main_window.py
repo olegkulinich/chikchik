@@ -938,7 +938,7 @@ class MainWindow(QMainWindow):
     TIPS = {"play_button": ("Play / Pause", "play", ""),
             "loop_button": ("Loop", "loop", ""),
             "trim_button": ("Trim", "trim", "Export only the In–Out range (off: the whole file)"),
-            "crop_button": ("Crop", "crop", "Drag on the video to draw a frame")}
+            "crop_button": ("Crop", "crop", "Drag on the video\nto draw a frame")}   # even lines
 
     def _update_tooltips(self) -> None:
         """T48 (B2): the current key (follows remapping) grey at the end of existing
@@ -946,7 +946,8 @@ class MainWindow(QMainWindow):
         for name, (text, action_id, note) in self.TIPS.items():
             getattr(self, name).setToolTip(key_tip(text, self._key_text(action_id), note))
         other = "Timecode" if self._frames_mode() else "Frames"
-        self.time_field.setToolTip(key_tip("Current time", f"Ctrl+Click — {other}"))
+        # B2-2b: a gesture, not a remappable key → its own grey line below
+        self.time_field.setToolTip(key_tip("Current time", "", f"Ctrl+Click — {other}"))
 
     def _escape(self) -> None:
         if self._fullscreen:
