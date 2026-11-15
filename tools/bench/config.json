@@ -18,12 +18,12 @@
       "sequence": false
     },
     "DJV": {
-      "exe": "C:\\Program Files\\DJV 3.4.2\\bin\\djv.exe",
+      "exe": "C:\\Program Files\\DJV 3.7.6\\bin\\djv.exe",
       "args": [],
       "sequence": true
     },
     "Chaos Player": {
-      "exe": "C:\\Program Files\\Chaos Group\\Chaos Player\\chaosplayer_qt5.exe",
+      "exe": "C:\\Program Files\\Chaos\\Player\\chaosplayer_qt5.exe",
       "args": [],
       "sequence": true
     }

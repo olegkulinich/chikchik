@@ -112,7 +112,9 @@ def _run(level: int) -> None:
 
 
 def start() -> None:
-    if sys.platform != "win32" or LEVEL <= 0:
+    if sys.platform != "win32":
+        return
+    if LEVEL <= 0:
         return
     threading.Thread(target=_run, args=(LEVEL,), name="gl-warm", daemon=True).start()
     startup_log.mark(f"GL warm: thread started (level {LEVEL})")
