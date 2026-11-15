@@ -486,9 +486,11 @@ class VideoView(QOpenGLWidget):
     # without a render context drops the video track; vid=no instead ends files that have
     # no audio either). Once the render context is ready vo goes to libmpv — mpv rebuilds
     # the video chain on the open file — then the pause the app asked for. Container,
-    # audio device and scripts get ready while Qt builds the window. QTC_EARLY_LOAD=0 →
-    # the E2 way (loadfile in initializeGL).
-    EARLY = os.environ.get("QTC_EARLY_LOAD", "1") != "0"
+    # audio device and scripts get ready while Qt builds the window.
+    # Off by default (T96 build 2): bench 2026-11-15 — the real picture came 150–270 ms
+    # later than the E2 way (decoding into vo=null competes with winId, the chain is built
+    # twice). QTC_EARLY_LOAD=1 turns it on for experiments; remove in F cleanup.
+    EARLY = os.environ.get("QTC_EARLY_LOAD", "0") == "1"
     _early: str | None = None        # None · "loading" (no video yet) · "video" · "done"
     _early_file_loaded = False
     _early_pause = True              # the pause to apply once the picture is there
