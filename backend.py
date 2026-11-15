@@ -1040,6 +1040,35 @@ class ExportWorker(QThread):
         return True, ""
 
 
+# E4 (T97): decoder per file. Hardware decoder init costs ~110–130 ms before the first
+# frame; for ≤ 1080p 8-bit H.264 & co. the CPU decodes the first frame sooner (bench
+# 2026-11-15: 1080p −50…−110 ms, 4K +80 ms with hwdec=no). Bigger / HEVC / AV1 / 10-bit
+# keep the hardware decoder.
+SOFTWARE_CODECS = {"h264", "mpeg4", "vp8", "vp9"}
+SOFTWARE_MAX_PIXELS = 1920 * 1088
+_DEEP_PIX_FMT = re.compile(r"p0\d\d|\d{2}(le|be)$")      # yuv420p10le, p010le, …
+
+
+def hwdec_for(info: MediaInfo | None, env=os.environ, cpus: int | None = None) -> str | None:
+    """mpv `hwdec` for this file as a per-file loadfile option, or None = the global
+    default (auto-copy). QTC_HWDEC=<value> forces one value for every file; hwdec given
+    in QTC_MPV_OPTS (older bench commands) or QTC_SAFE_GL (tests) turn the choice off."""
+    forced = env.get("QTC_HWDEC", "").strip()
+    if forced:
+        return forced
+    if env.get("QTC_SAFE_GL") or "hwdec" in env.get("QTC_MPV_OPTS", ""):
+        return None
+    if info is None or info.sequence is not None:      # unknown yet / images: default
+        return None
+    if (cpus or os.cpu_count() or 1) < 4:               # weak CPU: keep the GPU decoding
+        return "auto-copy"
+    fmt = info.pix_fmt or ""
+    if (info.codec in SOFTWARE_CODECS and fmt and not _DEEP_PIX_FMT.search(fmt)
+            and info.width * info.height <= SOFTWARE_MAX_PIXELS):
+        return "no"
+    return "auto-copy"
+
+
 class Probe:
     """E2 (55c): ffprobe in a background thread, started before the window is built.
 
@@ -1055,13 +1084,25 @@ class Probe:
         self._thread.start()
 
     def _run(self) -> None:
+        import startup_log
+
         try:
             if is_image(self.path):
-                self._info = probe_sequence(find_sequence(self.path))
+                sequence = find_sequence(self.path)        # E4 (T99): where seq time goes
+                startup_log.mark(f"probe thread: sequence listed, {len(sequence.files)} frames")
+                self._info = probe_sequence(sequence)
+                startup_log.mark("probe thread: sequence probed")
             else:
                 self._info = probe_media(self.path)
+                startup_log.mark("probe thread: ffprobe done")
         except BaseException as exc:      # handed to the GUI thread in result()
             self._error = exc
+
+    def peek(self) -> MediaInfo | None:
+        """The result if the thread is already done (never waits), else None."""
+        if self._thread.is_alive() or self._error is not None:
+            return None
+        return self._info
 
     def result(self) -> MediaInfo:
         self._thread.join()

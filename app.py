@@ -10,11 +10,16 @@ from pathlib import Path
 import placeholder  # noqa: I001 — E3 (B): first window of the process (sets DPI awareness)
 import gl_warm  # noqa: I001 — E2 (A): before PySide6, so the warm-up overlaps the imports
 
+# E4: desktop OpenGL straight away — skips Qt's GPU blacklist probe (bench: native window
+# −6 ms, window −10…−20 ms). Set QT_OPENGL=angle / software by hand to override.
+os.environ.setdefault("QT_OPENGL", "desktop")
+
 placeholder.start(sys.argv)
 gl_warm.start()
 if startup_log.ENABLED:          # which hidden switches this run had (bench variants)
     _switches = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
-                         if k.startswith("QTC_") and k != "QTC_STARTUP_LOG")
+                         if (k.startswith("QTC_") and k != "QTC_STARTUP_LOG")
+                         or k == "QT_OPENGL")
     startup_log.mark(f"env: {_switches or '-'}")
 
 from PySide6.QtCore import Qt, QTimer
@@ -24,6 +29,25 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from version import VERSION
 
 startup_log.mark("python: PySide6 imported")
+startup_log.cpu("PySide6 imported")
+
+
+def install_qt_trace() -> None:
+    """E4 (T95, QTC_GL_TRACE=1): Qt's OpenGL / window debug messages with timestamps into
+    the startup log — what winId and the GL context creation spend their time on."""
+    from PySide6.QtCore import QLoggingCategory, qInstallMessageHandler
+
+    def handler(_mode, context, message) -> None:
+        category = context.category or "qt"
+        if category.startswith("qt.qpa"):
+            startup_log.trace(category, message)
+        else:
+            sys.stderr.write(message + "\n")
+
+    QLoggingCategory.setFilterRules("qt.qpa.gl=true\nqt.qpa.window=true")
+    qInstallMessageHandler(handler)
+    startup_log.on_finish(lambda: QLoggingCategory.setFilterRules(
+        "qt.qpa.gl=false\nqt.qpa.window=false"))
 
 BASE_DIR = Path(__file__).resolve().parent
 _DLL_DIRECTORY_HANDLES = []
@@ -71,6 +95,8 @@ def main() -> int:
         if not is_image(probe.path):          # sequences need the probe for their frame list
             preload = probe.path
 
+    if startup_log.TRACE:
+        install_qt_trace()
     fmt = QSurfaceFormat.defaultFormat()
     fmt.setSwapInterval(1)
     QSurfaceFormat.setDefaultFormat(fmt)
@@ -82,6 +108,7 @@ def main() -> int:
     app.setApplicationVersion(VERSION)
     locale.setlocale(locale.LC_NUMERIC, "C")   # required by libmpv
     startup_log.mark("QApplication created")
+    startup_log.cpu("QApplication created")
 
     import theme
 
@@ -111,7 +138,7 @@ def main() -> int:
         from main_window import MainWindow
 
         startup_log.mark("main_window imported")
-        window = MainWindow(preload=preload)
+        window = MainWindow(preload=preload, probe=probe)
         startup_log.mark("MainWindow created")
     except Exception as exc:
         QMessageBox.critical(
@@ -149,6 +176,7 @@ def main() -> int:
     QTimer.singleShot(1000, uncloak_timer)    # safety net if no frame arrives
     window.show()
     startup_log.mark("window.show()")
+    startup_log.cpu("window.show()")
     if paths:
         window.open_path(Path(paths[0]), probe=probe)
         startup_log.mark("open_path returned")

@@ -15,6 +15,15 @@ import startup_log
 import theme
 
 
+def _gl_renderer() -> str:
+    """E4 (T95): which OpenGL the window got (desktop driver vs ANGLE / software)."""
+    try:
+        functions = QOpenGLContext.currentContext().functions()
+        return f"{functions.glGetString(0x1F01)} · GL {functions.glGetString(0x1F02)}"
+    except Exception as exc:
+        return f"? ({exc.__class__.__name__})"
+
+
 def _silence_minutes() -> float:
     """E3 (T93): minutes of pause with the audio device kept awake (QTC_SILENCE_MIN)."""
     try:
@@ -82,7 +91,10 @@ class VideoView(QOpenGLWidget):
         startup_log.mark("mpv module imported")
         # E2 build 2 (E): the options of this run, so a bench with QTC_MPV_OPTS is provable
         startup_log.mark("mpv options: " + " ".join(f"{k}={v}" for k, v in options.items()))
-        self.player = mpv.MPV(**options)
+        trace = {}
+        if startup_log.TRACE:           # E4 (T95): mpv's own steps into the startup log
+            trace = dict(log_handler=startup_log.mpv_message, loglevel="v")
+        self.player = mpv.MPV(**trace, **options)
         startup_log.mark("mpv core created")
         self._mpv = mpv
         self._render = None
@@ -129,12 +141,16 @@ class VideoView(QOpenGLWidget):
     MAX_SCALE = 32.0        # device px per video px
     # ------------------------------------------------------------ GL
     def initializeGL(self) -> None:
+        startup_log.mark("GL: initializeGL entered (Qt context current)")
+
         def get_proc_address(_ctx, name):
             context = QOpenGLContext.currentContext()
             address = context.getProcAddress(name.decode()) if context else 0
             return int(address) if address else 0
 
         self._get_proc = self._mpv.MpvGlGetProcAddressFn(get_proc_address)
+        if startup_log.ENABLED:
+            startup_log.mark("GL: renderer " + _gl_renderer())
         self._render = self._mpv.MpvRenderContext(
             self.player, "opengl",
             opengl_init_params={"get_proc_address": self._get_proc},
@@ -442,11 +458,12 @@ class VideoView(QOpenGLWidget):
     # ------------------------------------------------------- control
     _preloaded: str | None = None
 
-    def preload(self, path: Path, autoplay: bool) -> None:
+    def preload(self, path: Path, autoplay: bool, decoder=None) -> None:
         """E2 (55b'): start loading before ffprobe and the UI are done; `load` with the
         same path then skips its loadfile. mpv drops the video track if the file opens
         before the render context exists, so the loadfile waits for initializeGL."""
         self._preloaded = str(path)
+        self._preload_decoder = decoder      # E4 (T97): () -> hwdec or None, asked at send
         self._preload_waiting = True
         self._set("pause", not autoplay)
         self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
@@ -455,12 +472,15 @@ class VideoView(QOpenGLWidget):
             self._send_preload()
 
     _preload_waiting = False
+    _preload_decoder = None
 
     def _send_preload(self) -> None:
         if self._preload_waiting and self._preloaded is not None:
             self._preload_waiting = False
+            hwdec = self._preload_decoder() if self._preload_decoder else None
+            startup_log.mark(f"decoder (preload): {hwdec or 'default'}")
             startup_log.mark("mpv: loadfile sent (preload)", once=True)
-            self._command("loadfile", self._preloaded, "replace")
+            self._loadfile(self._preloaded, f"hwdec={hwdec}" if hwdec else "")
 
     def cancel_preload(self) -> None:
         if self._preloaded is not None:
@@ -472,8 +492,10 @@ class VideoView(QOpenGLWidget):
 
     def load(self, path: Path | str, frame_size: tuple[int, int], aid: int | None,
              sid: int | None = None, autoplay: bool = True,
-             frame_duration: float | None = None, sequence_fps: float | None = None) -> None:
-        """`path` may be an mpv URL (T36: mf://@list for an image sequence)."""
+             frame_duration: float | None = None, sequence_fps: float | None = None,
+             hwdec: str | None = None) -> None:
+        """`path` may be an mpv URL (T36: mf://@list for an image sequence). `hwdec`
+        (E4, T97): per-file decoder, None = the global default."""
         self.frame_size = frame_size
         self.frame_duration_s = frame_duration
         self.has_video = True
@@ -497,28 +519,38 @@ class VideoView(QOpenGLWidget):
             self.set_audio(aid)          # mpv was idle before the preload: plain sets hold
             self.set_subtitle(sid)
         else:
+            startup_log.mark(f"decoder: {hwdec or 'default'}")
             startup_log.mark("mpv: loadfile sent", once=True)
-            self._loadfile(str(path), aid, sid)
+            tracks = f"aid={aid if aid else 'no'},sid={sid if sid else 'no'}"
+            self._loadfile(str(path), tracks + (f",hwdec={hwdec}" if hwdec else ""),
+                           aid, sid)
         self._preloaded = None
         self._preload_waiting = False
         self._set("pause", paused)
         self.update()
 
-    def _loadfile(self, url: str, aid: int | None, sid: int | None) -> None:
-        """Tracks go with the loadfile as per-file options: an async `set aid` sent right
-        after an async loadfile reaches the file being closed and is lost (sequence → mp4
-        opened silent). Named arguments read the same in mpv ≤ 0.37 and ≥ 0.38 (which
-        added an index argument). Rejected → the old way, sets after the loadfile."""
-        tracks = f"aid={aid if aid else 'no'},sid={sid if sid else 'no'}"
+    _KEEP = object()        # preload: tracks stay as they are
+
+    def _loadfile(self, url: str, options: str, aid=_KEEP, sid=_KEEP) -> None:
+        """Tracks (and E4: the decoder) go with the loadfile as per-file options: an async
+        `set aid` sent right after an async loadfile reaches the file being closed and is
+        lost (sequence → mp4 opened silent). Named arguments read the same in mpv ≤ 0.37
+        and ≥ 0.38 (which added an index argument). Rejected → the old way, sets after
+        the loadfile (the decoder then stays the global default)."""
+        if not options:
+            self._command("loadfile", url, "replace")
+            return
 
         def reply(error, _data) -> None:                    # mpv event thread
             if error:
                 self._command("loadfile", url, "replace")
-                self.set_audio(aid)
-                self.set_subtitle(sid)
+                if aid is not self._KEEP:
+                    self.set_audio(aid)
+                if sid is not self._KEEP:
+                    self.set_subtitle(sid)
 
         try:
-            self.player.command_async("loadfile", url=url, flags="replace", options=tracks,
+            self.player.command_async("loadfile", url=url, flags="replace", options=options,
                                       callback=reply)
         except Exception:
             reply(True, None)

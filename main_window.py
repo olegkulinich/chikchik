@@ -70,6 +70,7 @@ from backend import (
     normalize_crop,
     palette_path,
     png_pattern,
+    hwdec_for,
     probe_media,
     same_path,
     scaled_size,
@@ -448,7 +449,7 @@ def _sizing_log(line: str) -> None:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, preload: Path | None = None):
+    def __init__(self, preload: Path | None = None, probe=None):
         super().__init__()
         startup_log.mark("MainWindow: QMainWindow base")
         self.config = Config(self)
@@ -456,6 +457,7 @@ class MainWindow(QMainWindow):
         # E2 (55b'): file given on the command line → mpv starts loading it as soon as its
         # core exists, while the rest of the UI is still being built.
         self._preload = preload
+        self._probe = probe            # E4 (T97): its result picks the decoder if ready
         self.source: Path | None = None
         self.info: MediaInfo | None = None
         self.audio: AudioTrack | None = None
@@ -557,8 +559,10 @@ class MainWindow(QMainWindow):
                 self.setWindowState(self.windowState() & ~Qt.WindowState.WindowFullScreen)
         startup_log.mark("MainWindow: geometry restored")
         if startup_log.ENABLED:          # E2 build 2: native window + GL driver vs the DWM call
+            startup_log.cpu("before winId")       # E4 (T95): busy or waiting in winId?
             self.winId()
             startup_log.mark("MainWindow: native window (winId)")
+            startup_log.cpu("after winId")
         theme.dark_title_bar(self)
         startup_log.mark("MainWindow: dark title bar")
         self._apply_layout()                     # T27: the remembered UI mode
@@ -586,7 +590,15 @@ class MainWindow(QMainWindow):
         self.video = VideoView()
         startup_log.mark("UI: VideoView (mpv core)")
         if self._preload is not None:
-            self.video.preload(self._preload, autoplay=self.config.flag("autoplay"))
+            probe = self._probe
+
+            def decoder() -> str | None:          # asked when the preload loadfile goes
+                info = probe.peek() if probe is not None else None
+                startup_log.mark(f"probe ready at preload: {'yes' if info else 'no'}")
+                return hwdec_for(info)
+
+            self.video.preload(self._preload, autoplay=self.config.flag("autoplay"),
+                               decoder=decoder)
         central.video = self.video
         self.video.crop_drawn.connect(self._crop_drawn)
         self.video.menu_requested.connect(self.show_menu)
@@ -1053,6 +1065,7 @@ class MainWindow(QMainWindow):
             if self._mpv_list is not None:
                 self._remove(self._mpv_list)
             self._mpv_list = mpv_list(sequence)
+            startup_log.mark("sequence: mpv frame list written")       # E4 (T99)
             url: Path | str = f"mf://@{self._mpv_list}"
         else:
             url = path
@@ -1069,7 +1082,8 @@ class MainWindow(QMainWindow):
                         self.audio.number if self.audio else None, None,
                         autoplay=autoplay,                                 # T35
                         frame_duration=info.frame_duration,
-                        sequence_fps=info.fps if sequence is not None else None)
+                        sequence_fps=info.fps if sequence is not None else None,
+                        hwdec=hwdec_for(info))                             # E4 (T97)
         startup_log.mark("video.load returned")
         if keep is None:
             start_format = self.config.start_format()                      # T25
