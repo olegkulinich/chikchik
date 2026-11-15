@@ -580,6 +580,18 @@ class MainWindow(QMainWindow):
             self._settings_popover = SettingsPopover(self.config, self)
         return self._settings_popover
 
+    def _popover_open(self) -> bool:
+        """T56: Settings or Hotkeys on screen (they aren't modal any more)."""
+        return any(p is not None and p.isVisible()
+                   for p in (self._settings_popover, self._hotkeys_popover))
+
+    def toggle_hotkeys(self) -> None:
+        """Ctrl+/ opens Hotkeys; pressed again (focus on the main window) closes it."""
+        if self._hotkeys_popover is not None and self._hotkeys_popover.isVisible():
+            self._hotkeys_popover.close()
+        else:
+            self.hotkeys_popover.popup_over(self.video)
+
     @property
     def hotkeys_popover(self) -> HotkeysPopover:
         if self._hotkeys_popover is None:
@@ -772,7 +784,7 @@ class MainWindow(QMainWindow):
 
     def _install_menu_actions(self) -> None:
         handlers = {
-            "hotkeys": lambda: self.hotkeys_popover.popup_over(self.video),
+            "hotkeys": self.toggle_hotkeys,
             "settings": self._show_settings,
             "open": self.open_dialog,
             "export": lambda: self.export(ask=False),       # T42: like Save
@@ -810,7 +822,7 @@ class MainWindow(QMainWindow):
             # T50b: Ctrl+/ by the physical key — on a Russian layout it types "." and Qt
             # (matching by the character) never opened Hotkeys
             if kind == QEvent.Type.KeyPress and not event.isAutoRepeat():
-                self.hotkeys_popover.popup_over(self.video)
+                self.toggle_hotkeys()
             event.accept()
             return True
         if in_window and kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) \
@@ -1978,6 +1990,7 @@ class MainWindow(QMainWindow):
 
     def _show_format(self) -> None:
         self.format_button.setText(self._format_label(self.fmt))
+        self._sync_settings_encoder()
 
     def set_format(self, fmt: str, explain: bool = False) -> None:
         if fmt not in FORMATS:
@@ -2252,7 +2265,7 @@ class MainWindow(QMainWindow):
         held = bool(QApplication.mouseButtons())
         focus = QApplication.focusWidget()
         popup = (QApplication.activePopupWidget() is not None
-                 or QApplication.activeModalWidget() is not None)   # menus; Settings/Hotkeys (9a)
+                 or self._popover_open())          # menus; Settings/Hotkeys (9a, T56)
         for reveal in (self._panels_reveal, self._title_reveal):
             if not reveal.active:
                 continue
@@ -2280,7 +2293,7 @@ class MainWindow(QMainWindow):
             return
         if (self._fullscreen and not self._cursor_hidden and not held
                 and not self._panels_reveal.shown and QApplication.activePopupWidget() is None
-                and QApplication.activeModalWidget() is None
+                and not self._popover_open()
                 and self.isActiveWindow()
                 and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
             QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
@@ -2775,9 +2788,18 @@ class MainWindow(QMainWindow):
                                 action=False, ms=2500)
 
     def _show_settings(self) -> None:
-        # T16b: Quality/Speed only matter for x264 (.mp4)
-        self.settings_popover.set_encoder_enabled(self.info is None or self._kind() == "mp4")
+        """Ctrl+K opens Settings; pressed again (focus on the main window) closes it."""
+        if self._settings_popover is not None and self._settings_popover.isVisible():
+            self._settings_popover.close()
+            return
         self.settings_popover.popup_over(self.video)
+        self._sync_settings_encoder()
+
+    def _sync_settings_encoder(self) -> None:
+        """T16b: Quality/Speed only matter for x264 (.mp4). T56: Settings can stay open
+        while the format changes, so this follows every format change."""
+        if self._settings_popover is not None:
+            self._settings_popover.set_encoder_enabled(self.info is None or self._kind() == "mp4")
 
     @staticmethod
     def _remove(path: Path) -> None:
@@ -2848,6 +2870,9 @@ class MainWindow(QMainWindow):
 
             value = None if self._fullscreen else placeholder.save_value(self.winId())
             self.config.set_placeholder(f"{value},{self._ui_mode}" if value else "")
+        for popover in (self._settings_popover, self._hotkeys_popover):   # T56: not modal —
+            if popover is not None:                                        # they'd keep the app alive
+                popover.close()
         self.poll.stop()
         self.video.shutdown()
         event.accept()

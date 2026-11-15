@@ -909,8 +909,10 @@ def _glyph_font() -> str:
 
 
 class Popover(QFrame):
-    """Floating panel (Settings, Hotkeys). 9a: modal — a click outside doesn't close
-    it (only menus close that way); ✕, Esc or its own hotkey (`toggle_keys`) do."""
+    """Floating panel (Settings, Hotkeys). A click outside doesn't close it (only menus
+    close that way); ✕, Esc or its own hotkey (`toggle_keys`) do. T56 (B2): not modal —
+    the main window stays usable (no error ding) and its ✕ / Ctrl+Q close it too; an
+    owned window, so it stays above the main window."""
 
     CLOSE = 20
     toggle_keys: tuple[str, ...] = ()       # e.g. ("Ctrl+K",) — the key that opened it
@@ -923,7 +925,6 @@ class Popover(QFrame):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.NoDropShadowWindowHint,
         )
-        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
