@@ -71,6 +71,8 @@ from backend import (
     palette_path,
     png_pattern,
     decoder_options,
+    intra_threads_option,
+    SEQUENCE_FPS,
     probe_media,
     same_path,
     scaled_size,
@@ -488,6 +490,7 @@ class MainWindow(QMainWindow):
         self.setMinimumHeight(420)  # min width comes from the bottom row (~960 px)
         # T22 fullscreen: panels float over the video and show on hover
         self._mpv_list: Path | None = None   # T36: mf:// frame list of the open sequence
+        self._preload_list: tuple | None = None   # T96: (sequence, frame list) preloaded
         self._ui_ready = False
         self._fullscreen = False
         self._window_geometry = None        # saveGeometry() from before fullscreen
@@ -591,14 +594,18 @@ class MainWindow(QMainWindow):
         startup_log.mark("UI: VideoView (mpv core)")
         if self._preload is not None:
             probe = self._probe
+            sequence = is_image(self._preload)
 
-            def decoder() -> str:                 # asked when the preload loadfile goes
+            def decoder() -> str:                 # asked when the video of the preload starts
                 info = probe.peek() if probe is not None else None
                 startup_log.mark(f"probe ready at preload: {'yes' if info else 'no'}")
+                if info is None and sequence:     # T96: a sequence is always intra-only
+                    return intra_threads_option()
                 return decoder_options(info)
 
-            self.video.preload(self._preload, autoplay=self.config.flag("autoplay"),
-                               decoder=decoder)
+            self.video.preload(self._preload_sequence_url if sequence else self._preload,
+                               autoplay=self.config.flag("autoplay"), decoder=decoder,
+                               sequence_fps=SEQUENCE_FPS if sequence else None)
         central.video = self.video
         self.video.crop_drawn.connect(self._crop_drawn)
         self.video.menu_requested.connect(self.show_menu)
@@ -1027,6 +1034,18 @@ class MainWindow(QMainWindow):
         if filename:
             self.open_path(Path(filename))
 
+    def _preload_sequence_url(self) -> str | None:
+        """T96: the mf:// list of the sequence being probed, None while the thread is still
+        listing it or when it has gaps (their black frame comes from the probe)."""
+        probe = self._probe
+        sequence = probe.sequence if probe is not None else None
+        if sequence is None or any(f is None for f in sequence.files):
+            return None
+        frames = mpv_list(sequence)
+        self._preload_list = (sequence, frames)
+        startup_log.mark(f"sequence preload: {len(sequence.files)} frames listed")
+        return f"mf://@{frames}"
+
     def open_path(self, path: Path, probe=None) -> None:
         """`probe` (E2, 55c): an ffprobe already running in a thread (`backend.Probe`)."""
         if self.worker is not None:
@@ -1064,8 +1083,16 @@ class MainWindow(QMainWindow):
         if sequence is not None:
             if self._mpv_list is not None:
                 self._remove(self._mpv_list)
-            self._mpv_list = mpv_list(sequence)
-            startup_log.mark("sequence: mpv frame list written")       # E4 (T99)
+            preloaded, self._preload_list = self._preload_list, None
+            if keep is None and preloaded is not None and preloaded[0].files == sequence.files \
+                    and sequence.placeholder is None:
+                self._mpv_list = preloaded[1]                              # T96: same list
+                startup_log.mark("sequence: preloaded frame list kept")
+            else:
+                if preloaded is not None:
+                    self._remove(preloaded[1])
+                self._mpv_list = mpv_list(sequence)
+                startup_log.mark("sequence: mpv frame list written")   # E4 (T99)
             url: Path | str = f"mf://@{self._mpv_list}"
         else:
             url = path

@@ -88,12 +88,11 @@ def main() -> int:
     probe = None
     preload = None
     if paths:
-        from backend import Probe, is_image
+        from backend import Probe
 
         probe = Probe(Path(paths[0]))
         startup_log.mark("ffprobe thread started")
-        if not is_image(probe.path):          # sequences need the probe for their frame list
-            preload = probe.path
+        preload = probe.path                  # T96: sequences too (frame list from the probe thread)
 
     if startup_log.TRACE:
         install_qt_trace()
