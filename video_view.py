@@ -752,6 +752,13 @@ class VideoView(QOpenGLWidget):
             self._command("set", "ab-loop-a", f"{start:.6f}")
             self._command("set", "ab-loop-b", f"{end:.6f}")
 
+    def set_volume(self, percent: int) -> None:
+        """T66: 0–100."""
+        self._command("set", "volume", str(int(percent)))
+
+    def set_mute(self, on: bool) -> None:
+        self._command("set", "mute", "yes" if on else "no")
+
     def seek_relative(self, delta: float) -> None:
         self._command("seek", f"{delta:.6f}", "relative+exact")
 

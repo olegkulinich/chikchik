@@ -80,7 +80,8 @@ from backend import (
     unique_path,
     validate_video,
 )
-from config import FORMAT_HOTKEYS, MENU_ALIASES, MENU_SHORTCUTS, SCALE_HOTKEYS, Config, display_key
+from config import (ESC_KEY, FORMAT_HOTKEYS, MENU_ALIASES, MENU_SHORTCUTS, SCALE_HOTKEYS, Config,
+                    display_key)
 from popovers import HotkeysPopover, SettingsPopover
 from video_view import VideoView
 from widgets import (
@@ -591,6 +592,8 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
 
         self.video = VideoView()
+        self._muted = False                      # T66: not remembered — a file never opens silent
+        self.video.set_volume(self._volume())
         startup_log.mark("UI: VideoView (mpv core)")
         if self._preload is not None:
             probe = self._probe
@@ -657,7 +660,8 @@ class MainWindow(QMainWindow):
         self.time_field.ctrl_click = True
         self.time_field.ctrl_clicked.connect(self.toggle_frames_mode)          # T39
         transport.addWidget(self.play_button)
-        self.loop_button = button("∞", checkable=True, tooltip="Loop (L)")    # T21
+        loop_key = display_key(self.config.hotkey("loop"))
+        self.loop_button = button("∞", checkable=True, tooltip=f"Loop ({loop_key})")    # T21
         self.loop_button.setFixedWidth(32)
         if startup_log.ENABLED:
             self.loop_button.ensurePolished()
@@ -868,6 +872,9 @@ class MainWindow(QMainWindow):
             "play": self.toggle_play,
             "loop": lambda: self.loop_button.toggle() if self.info is not None else None,
             "fullscreen": self.toggle_fullscreen,                         # T22
+            "mute": self.toggle_mute,                                     # T66
+            "volume_up": lambda: self.change_volume(self.VOLUME_STEP),
+            "volume_down": lambda: self.change_volume(-self.VOLUME_STEP),
             "go_start": lambda: self._go_to(start=True),
             "go_end": lambda: self._go_to(start=False),
             "undo": self.undo,
@@ -887,6 +894,43 @@ class MainWindow(QMainWindow):
             shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
             shortcut.activated.connect(handlers[action_id])
             self._shortcuts.append(shortcut)
+        # T65: Esc only leaves fullscreen (fields / Settings / Hotkeys handle their own Esc);
+        # skipped if the user gave Esc to an action
+        if not any(QKeySequence(k) == QKeySequence(ESC_KEY[1])
+                   for k in self.config.hotkeys().values() if k):
+            shortcut = QShortcut(QKeySequence(ESC_KEY[1]), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(self._escape)
+            self._shortcuts.append(shortcut)
+
+    def _escape(self) -> None:
+        if self._fullscreen:
+            self.toggle_fullscreen()
+
+    # ============================================================ sound (T66)
+    VOLUME_STEP = 5
+
+    def _volume(self) -> int:
+        try:
+            return max(0, min(100, int(float(self.config.get("volume")))))
+        except ValueError:
+            return 100
+
+    def toggle_mute(self) -> None:
+        self._muted = not self._muted
+        self.video.set_mute(self._muted)
+        self.toast.show_message("Muted" if self._muted else f"Volume {self._volume()}%",
+                                action=False, ms=1200)
+
+    def change_volume(self, delta: int) -> None:
+        """↑/↓ ±5%, 0–100; like macOS keys, a change also unmutes. One toast, updated in place."""
+        volume = max(0, min(100, self._volume() + delta))
+        self.config.set("volume", str(volume))
+        self.video.set_volume(volume)
+        if self._muted:
+            self._muted = False
+            self.video.set_mute(False)
+        self.toast.show_message(f"Volume {volume}%", action=False, ms=1200)
 
     # ============================================================== menu
     def _new_menu(self) -> QMenu:

@@ -14,13 +14,14 @@ DEFAULTS = {
     "quality": "normal",     # high | normal | small  (High / Medium / Low)
     "speed": "medium",       # fast | medium | slow
     "save_to": "same",       # same | ask
-    "autoplay": "1",         # T35: start playing when a file opens
+    "autoplay": "0",         # T35; T103: off by default (neutral defaults, principle 1)
     "default_format": "mp4", # T25: mp4 | gif | png | copy (Original)
     "last_used": "0",        # T25: open with the format of the last export
     "last_format": "",       # T25: format of the last successful export
     "frames_mode": "0",      # T39: show frames instead of timecode
     "pin_on_top": "0",       # T45: window stays above others (remembered)
     "loop": "0",             # T53: ∞ remembered between launches
+    "volume": "100",         # T66: 0–100, remembered (mute is not)
 }
 
 
@@ -33,11 +34,11 @@ class HotkeyAction:
 
 HOTKEY_ACTIONS = (
     HotkeyAction("trim", "Trim", "T"),
-    HotkeyAction("reset_trim", "Reset Trim", "Shift+Esc"),
+    HotkeyAction("reset_trim", "Reset Trim", "Ctrl+Shift+T"),   # T65 (was Shift+Esc)
     HotkeyAction("trim_in", "Trim In", "I"),
     HotkeyAction("trim_out", "Trim Out", "O"),
     HotkeyAction("crop", "Crop", "C"),
-    HotkeyAction("reset_crop", "Reset Crop", "Esc"),
+    HotkeyAction("reset_crop", "Reset Crop", "Ctrl+Shift+C"),   # T65 (was Esc)
     HotkeyAction("frame_next", "Jump Forward 1 frame", "Right"),
     HotkeyAction("frame_prev", "Jump Backward 1 frame", "Left"),
     HotkeyAction("sec_next", "Jump Forward 1 sec", "Ctrl+Right"),
@@ -45,22 +46,26 @@ HOTKEY_ACTIONS = (
     HotkeyAction("sec5_next", "Jump Forward 5 sec", "Shift+Right"),
     HotkeyAction("sec5_prev", "Jump Backward 5 sec", "Shift+Left"),
     HotkeyAction("play", "Play/Pause", "Space"),
-    HotkeyAction("loop", "Loop", "L"),                       # T21
+    HotkeyAction("loop", "Loop", "Shift+L"),                 # T21; T65 (was L)
     HotkeyAction("go_start", "Go to Start", "Home"),         # T41
     HotkeyAction("go_end", "Go to End", "End"),              # T41
     HotkeyAction("undo", "Undo", "Ctrl+Z"),                  # T32
     HotkeyAction("redo", "Redo", "Ctrl+Shift+Z"),            # T32
+    HotkeyAction("mute", "Mute", "M"),                       # T66
+    HotkeyAction("volume_up", "Volume Up", "Up"),            # T66: a focused field keeps ↑/↓
+    HotkeyAction("volume_down", "Volume Down", "Down"),      # T66
     HotkeyAction("fullscreen", "Fullscreen", "F"),           # T22
     # Key N = 1/N; 0.75x has no key (menu only).
     HotkeyAction("scale_1", "Scale 1x", "1"),
     HotkeyAction("scale_2", "Scale 0.5x", "2"),
     HotkeyAction("scale_3", "Scale 0.33x", "3"),
     HotkeyAction("scale_4", "Scale 0.25x", "4"),
-    # T37: formats, same order as everywhere — .mp4 / .gif / .png / Original
-    HotkeyAction("fmt_mp4", "Format .mp4", "M"),
-    HotkeyAction("fmt_gif", "Format .gif", "G"),
-    HotkeyAction("fmt_png", "Format .png", "P"),
-    HotkeyAction("fmt_copy", "Format Original", "0"),
+    # T37: formats, same order as everywhere — .mp4 / .gif / .png / Original.
+    # T65: no default keys (M went to Mute); remappable, e.g. Alt+1.
+    HotkeyAction("fmt_mp4", "Format .mp4", ""),
+    HotkeyAction("fmt_gif", "Format .gif", ""),
+    HotkeyAction("fmt_png", "Format .png", ""),
+    HotkeyAction("fmt_copy", "Format Original", ""),
 )
 
 FORMAT_HOTKEYS = {"fmt_mp4": "mp4", "fmt_gif": "gif", "fmt_png": "png", "fmt_copy": "copy"}
@@ -87,6 +92,10 @@ MENU_SHORTCUTS = {
 
 # Extra key spellings for menu shortcuts (Shift+\ is reported as | on some layouts).
 MENU_ALIASES = {"minimize_ui": ("Ctrl+|", "Ctrl+Shift+|")}
+
+# T65: Esc never changes data — it only leaves fullscreen (fields and windows
+# handle their own Esc). Fixed, but checked for conflicts like the menu shortcuts.
+ESC_KEY = ("Exit Fullscreen", "Esc")
 
 UI_MODES = ("normal", "minimal", "hidden")
 
@@ -144,8 +153,21 @@ class Config(QObject):
 
     # --- hotkeys
     def hotkey(self, action_id: str) -> str:
+        stored = self._store.value(f"hotkeys/{action_id}")
+        if stored is not None:
+            return str(stored)
         default = next(a.default for a in HOTKEY_ACTIONS if a.id == action_id)
-        return str(self._store.value(f"hotkeys/{action_id}", default))
+        # T65 (B2): a key the user gave to another action stays theirs — a new default
+        # that lands on it stays empty (assign it in Hotkeys if wanted).
+        if default:
+            wanted = QKeySequence(default)
+            for action in HOTKEY_ACTIONS:
+                if action.id == action_id:
+                    continue
+                other = self._store.value(f"hotkeys/{action.id}")
+                if other is not None and other and QKeySequence(str(other)) == wanted:
+                    return ""
+        return default
 
     def hotkeys(self) -> dict[str, str]:
         return {a.id: self.hotkey(a.id) for a in HOTKEY_ACTIONS}
@@ -166,7 +188,7 @@ class Config(QObject):
         for action in HOTKEY_ACTIONS:
             if action.id != exclude and QKeySequence(self.hotkey(action.id)) == wanted:
                 return action.title
-        for title, key in MENU_SHORTCUTS.values():
+        for title, key in (*MENU_SHORTCUTS.values(), ESC_KEY):
             if QKeySequence(key) == wanted:
                 return title
         return ""
