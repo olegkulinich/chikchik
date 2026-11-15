@@ -24,6 +24,16 @@ def _gl_renderer() -> str:
         return f"? ({exc.__class__.__name__})"
 
 
+def _shader_cache_dir() -> str:
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.cache")
+    path = os.path.join(base, "ChikChik", "shader-cache")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
 def _silence_minutes() -> float:
     """E3 (T93): minutes of pause with the audio device kept awake (QTC_SILENCE_MIN)."""
     try:
@@ -74,10 +84,12 @@ class VideoView(QOpenGLWidget):
             options.update(gpu_dumb_mode="yes", hwdec="no")
         # E2 (55g): extra mpv options for experiments without a new build, e.g.
         # QTC_MPV_OPTS="audio-stream-silence=yes audio-buffer=0.1"
-        for item in os.environ.get("QTC_MPV_OPTS", "").split():
-            name, _, value = item.partition("=")
-            if name:
-                options[name.strip().replace("-", "_")] = value.strip() or "yes"
+        from backend import mpv_opts_env
+
+        extra = mpv_opts_env()
+        if os.environ.get("QTC_SHADER_CACHE") == "1":     # E4 experiment: GL program cache
+            extra.setdefault("gpu_shader_cache_dir", _shader_cache_dir())
+        options.update(extra)
         # E3 (T93): the silence keeps a SYSTEM power request (blocks automatic sleep), so
         # it is fed only for the first QTC_SILENCE_MIN minutes of a pause (default 10).
         self._silence = str(options.get("audio_stream_silence", "no")) == "yes"
@@ -94,7 +106,15 @@ class VideoView(QOpenGLWidget):
         trace = {}
         if startup_log.TRACE:           # E4 (T95): mpv's own steps into the startup log
             trace = dict(log_handler=startup_log.mpv_message, loglevel="v")
-        self.player = mpv.MPV(**trace, **options)
+        try:
+            self.player = mpv.MPV(**trace, **options)
+        except Exception as exc:     # a typo in QTC_MPV_OPTS must not stop the app
+            if not extra:
+                raise
+            startup_log.mark(f"mpv options rejected ({exc.__class__.__name__}), extras dropped")
+            for name in extra:
+                options.pop(name, None)
+            self.player = mpv.MPV(**trace, **options)
         startup_log.mark("mpv core created")
         self._mpv = mpv
         self._render = None

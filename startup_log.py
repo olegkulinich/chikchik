@@ -42,6 +42,21 @@ _finished = False
 _last = 0.0
 
 
+def _kernel32():
+    """kernel32 with 64-bit-safe signatures: without restype/argtypes ctypes passes the
+    GetCurrentProcess pseudo-handle (-1) as a 32-bit int and GetProcessTimes fails —
+    E2–E4 build 1 logs silently counted from Python start, not process creation."""
+    import ctypes
+    import ctypes.wintypes as wt
+
+    k = ctypes.WinDLL("kernel32")
+    k.GetCurrentProcess.restype = wt.HANDLE
+    k.GetProcessTimes.restype = wt.BOOL
+    k.GetProcessTimes.argtypes = [wt.HANDLE] + [ctypes.POINTER(wt.FILETIME)] * 4
+    k.GetSystemTimePreciseAsFileTime.argtypes = [ctypes.POINTER(wt.FILETIME)]
+    return k
+
+
 def _process_age_ms() -> float | None:
     """Milliseconds since this process was created (Windows), else None."""
     if os.name != "nt":
@@ -50,7 +65,7 @@ def _process_age_ms() -> float | None:
         import ctypes
         import ctypes.wintypes as wt
 
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = _kernel32()
         created, exited, kernel, user = (wt.FILETIME() for _ in range(4))
         if not kernel32.GetProcessTimes(kernel32.GetCurrentProcess(), ctypes.byref(created),
                                         ctypes.byref(exited), ctypes.byref(kernel),
@@ -74,7 +89,7 @@ def _process_cpu_ms() -> tuple[float, float] | None:
             import ctypes
             import ctypes.wintypes as wt
 
-            kernel32 = ctypes.windll.kernel32
+            kernel32 = _kernel32()
             created, exited, kernel, user = (wt.FILETIME() for _ in range(4))
             if kernel32.GetProcessTimes(kernel32.GetCurrentProcess(), ctypes.byref(created),
                                         ctypes.byref(exited), ctypes.byref(kernel),

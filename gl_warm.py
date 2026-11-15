@@ -111,8 +111,43 @@ def _run(level: int) -> None:
         startup_log.mark(f"GL warm: failed · {exc}")
 
 
+D3D9 = os.environ.get("QTC_D3D9_WARM") == "1"     # E4 experiment, default off
+
+
+def _warm_d3d9() -> None:
+    """E4 (T95): Qt's first winId asks Direct3D 9 for the GPU (Direct3DCreate9 +
+    GetAdapterIdentifier → driver blacklist check, ~56 ms on the main thread even with
+    QT_OPENGL=desktop). Doing it once here loads d3d9.dll and the driver's D3D part early."""
+    import ctypes
+
+    try:
+        d3d9 = ctypes.WinDLL("d3d9")
+        d3d9.Direct3DCreate9.restype = ctypes.c_void_p
+        d3d9.Direct3DCreate9.argtypes = [ctypes.c_uint]
+        obj = d3d9.Direct3DCreate9(32)                      # D3D_SDK_VERSION
+        if not obj:
+            startup_log.mark("D3D9 warm: no object")
+            return
+        vtable = ctypes.cast(ctypes.c_void_p.from_address(obj).value,
+                             ctypes.POINTER(ctypes.c_void_p))
+        identify = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint,
+                                      ctypes.c_uint32, ctypes.c_void_p)(vtable[5])
+        release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtable[2])
+        buffer = ctypes.create_string_buffer(2048)          # D3DADAPTER_IDENTIFIER9 ~1104
+        identify(obj, 0, 0, buffer)
+        release(obj)
+        startup_log.mark("D3D9 warm: done")
+    except Exception as exc:
+        startup_log.mark(f"D3D9 warm: failed · {exc}")
+
+
 def start() -> None:
-    if sys.platform != "win32" or LEVEL <= 0:
+    if sys.platform != "win32":
+        return
+    if D3D9:
+        threading.Thread(target=_warm_d3d9, name="d3d9-warm", daemon=True).start()
+        startup_log.mark("D3D9 warm: thread started")
+    if LEVEL <= 0:
         return
     threading.Thread(target=_run, args=(LEVEL,), name="gl-warm", daemon=True).start()
     startup_log.mark(f"GL warm: thread started (level {LEVEL})")

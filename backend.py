@@ -1049,6 +1049,17 @@ SOFTWARE_MAX_PIXELS = 1920 * 1088
 _DEEP_PIX_FMT = re.compile(r"p0\d\d|\d{2}(le|be)$")      # yuv420p10le, p010le, …
 
 
+def mpv_opts_env(env=os.environ) -> dict[str, str]:
+    """QTC_MPV_OPTS="name=value name2=value2" (or ';'-separated — the bench's --env splits
+    on spaces) → {name_with_underscores: value}."""
+    result = {}
+    for item in env.get("QTC_MPV_OPTS", "").replace(";", " ").split():
+        name, _, value = item.partition("=")
+        if name.strip():
+            result[name.strip().replace("-", "_")] = value.strip() or "yes"
+    return result
+
+
 def hwdec_for(info: MediaInfo | None, env=os.environ, cpus: int | None = None) -> str | None:
     """mpv `hwdec` for this file as a per-file loadfile option, or None = the global
     default (auto-copy). QTC_HWDEC=<value> forces one value for every file; hwdec given
@@ -1056,7 +1067,7 @@ def hwdec_for(info: MediaInfo | None, env=os.environ, cpus: int | None = None) -
     forced = env.get("QTC_HWDEC", "").strip()
     if forced:
         return forced
-    if env.get("QTC_SAFE_GL") or "hwdec" in env.get("QTC_MPV_OPTS", ""):
+    if env.get("QTC_SAFE_GL") or "hwdec" in mpv_opts_env(env):
         return None
     if info is None or info.sequence is not None:      # unknown yet / images: default
         return None
