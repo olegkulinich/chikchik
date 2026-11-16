@@ -239,11 +239,15 @@ GROUPS = (
               "crop", Twice("Reset Crop", "crop"),
               "undo", "redo",
               ("Frames / Timecode", "Ctrl+Click ⌛"),
-              ("Frame-Exact Scrub", "Alt+Drag"))),
+              ("Frame-Exact Scrub", "Alt+Drag"),
+              ("Scrub Frames", "Drag on Video"),                              # T100
+              ("Move Crop / Trim", "Ctrl+Drag"),                              # T51
+              ("Crop Proportions", "Shift+Drag"),                             # T52 / T70
+              ("Crop from Centre", "Alt+Drag"))),                             # T52
     ("Export", ("fmt_mp4", "fmt_gif", "fmt_png", "fmt_copy",
                 "scale_1", "scale_2", "scale_3", "scale_4")),
     ("View", ("fullscreen", (ESC_KEY[0], ESC_KEY[1]), "jump_playhead",
-              ("Resize Keeping Proportions", "Shift+Drag Edge"))),          # T44 / T106
+              ("Window Proportions", "Shift+Drag"))),                       # T44 / T106
 )
 
 

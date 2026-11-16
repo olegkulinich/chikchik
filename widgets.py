@@ -598,6 +598,7 @@ class Timeline(QWidget):
     in_dragged = Signal(float)
     out_dragged = Signal(float)
     edge_preview = Signal(float, bool)     # In/Out edge drag: time, final (release)
+    range_moved = Signal(float, bool)      # T51 Ctrl+Drag: new In (length kept), final
 
     EDGE = 6          # px grab zone around In/Out edges
     DRAG_START = 3    # px before a click becomes a drag
@@ -623,7 +624,8 @@ class Timeline(QWidget):
         self.trim_enabled = False
         self.view_start = 0.0
         self.view_end = 0.0
-        self._drag: str | None = None   # "seek" | "in" | "out"
+        self._drag: str | None = None   # "seek" | "in" | "out" | "range"
+        self._range0 = (0.0, 0.0)       # T51: (In, Out) when Ctrl+Drag started
         self._press_x = 0.0
         self._moved = False
         self._last_move = 0.0
@@ -820,6 +822,13 @@ class Timeline(QWidget):
         self._press_x = x
         self._moved = False
         self.fine, self._fine_anchor, self._park_x = False, None, None
+        if (event.modifiers() & Qt.KeyboardModifier.ControlModifier and self.trim_enabled
+                and self.trim_out > self.trim_in):
+            # T51: Ctrl+Drag anywhere moves the Trim range as a whole (a click does nothing)
+            self._drag = "range"
+            self._range0 = (self.trim_in, self.trim_out)
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+            return
         self._drag = self._edge_at(x) or "seek"
         if self._drag == "seek" and event.modifiers() & Qt.KeyboardModifier.AltModifier:
             # Alt+press: frame scrub from where the playhead is — no jump to the cursor
@@ -884,6 +893,9 @@ class Timeline(QWidget):
                 self.seek_requested.emit(self.position, True)     # the frame found with Alt
             else:
                 self._apply(event.position().x(), final=True)
+        if self._drag == "range":
+            self.setCursor(Qt.CursorShape.SizeHorCursor if self._edge_at(event.position().x())
+                           else Qt.CursorShape.ArrowCursor)
         self._drag = None
         self.fine, self._fine_anchor, self._park_x = False, None, None
         self._last_move = 0.0
@@ -919,6 +931,12 @@ class Timeline(QWidget):
         return x
 
     def _apply(self, x: float, final: bool) -> None:
+        if self._drag == "range":
+            t_in, t_out = self._range0
+            dt = (x - self._press_x) / max(1, self.width() - 1) * self._span()
+            new_in = max(0.0, min(self.duration - (t_out - t_in), t_in + dt))
+            self.range_moved.emit(new_in, final)
+            return
         if self._fine_anchor is not None:
             anchor_x, anchor_t = self._fine_anchor
             t = anchor_t + round(x - anchor_x) * self.frame_duration
