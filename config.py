@@ -46,7 +46,7 @@ HOTKEY_ACTIONS = (
     HotkeyAction("sec5_next", "Forward 5 sec", "Shift+Right"),
     HotkeyAction("sec5_prev", "Backward 5 sec", "Shift+Left"),
     HotkeyAction("play", "Play/Pause", "Space"),
-    HotkeyAction("loop", "Loop", "Ctrl+Shift+L"),            # T21; T65 (was L); JKL b3 (was Shift+L, kept free)
+    HotkeyAction("loop", "Loop", "Shift+L"),                 # T21; T65 (was L); Shift = mode (JKL b3 trial Ctrl+Shift+L reverted)
     HotkeyAction("jkl_forward", "Forward 10 sec", "L"),    # T67
     HotkeyAction("jkl_stop", "Pause", "K"),                                # T67
     HotkeyAction("jkl_back", "Backward 10 sec", "J"),      # T67
