@@ -799,11 +799,12 @@ class Timeline(QWidget):
             if 0 <= x < w:
                 p.fillRect(QRect(x, 0, 1, h), QColor(theme.PLAYHEAD))
             # minimap: whole file, visible window, playhead tick
-            p.fillRect(QRect(0, 0, w, self.MINIMAP_H), QColor(theme.MINIMAP_TRACK))
             scale = (w - 1) / self.duration
             vx1, vx2 = self.view_start * scale, self.view_end * scale
-            # T112: the visible-window slider stands out only when the timeline is zoomed
+            # T112: track and visible-window slider only when the timeline is zoomed;
+            # unzoomed the strip is the timeline background, only the playhead tick stays
             if self.is_zoomed():
+                p.fillRect(QRect(0, 0, w, self.MINIMAP_H), QColor(theme.MINIMAP_TRACK))
                 p.fillRect(QRectF(vx1, 0, max(2.0, vx2 - vx1 + 1), self.MINIMAP_H),
                            QColor(theme.MINIMAP_VIEW))
             p.fillRect(QRect(round(self.position * scale), 0, 1, self.MINIMAP_H + 1), QColor(theme.PLAYHEAD))
