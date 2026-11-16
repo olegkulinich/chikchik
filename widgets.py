@@ -605,6 +605,7 @@ class Timeline(QWidget):
     MINIMAP_H = 2     # px
     ZOOM_STEP = 1.25  # per wheel notch
     MAX_PX_PER_FRAME = 10
+    FRAME_TICK_PX = 4     # T71: frame ticks once frames are at least this far apart
     LABEL_SPACING = 110   # px, minimum distance between ruler labels
     NICE_STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200)
     NICE_FRAME_STEPS = (1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
@@ -762,6 +763,18 @@ class Timeline(QWidget):
             if self.trim_enabled:
                 x1, x2 = self._x(self.trim_in), self._x(self.trim_out)
                 p.fillRect(QRectF(x1, 0, max(2.0, x2 - x1 + 1), h), QColor(theme.TRIM_RANGE))
+            # T71: when single frames are visible — a short dark tick per frame (like a
+            # pixel grid), under the ruler ticks
+            fd = self.frame_duration
+            px_per_frame = fd * (w - 1) / self._span()
+            if fd > 0 and px_per_frame >= self.FRAME_TICK_PX:
+                tick = QColor(theme.FRAME_TICK)
+                k = max(0, math.floor(self.view_start / fd))
+                while k * fd <= self.view_end + fd:
+                    tx = round(self._x(k * fd))
+                    if 0 <= tx < w:
+                        p.fillRect(QRect(tx, h - 3, 1, 3), tick)
+                    k += 1
             # ruler: tick at the bottom + label, no minor ticks
             step = self._label_step()
             first = math.floor(self.view_start / step) * step
@@ -786,10 +799,14 @@ class Timeline(QWidget):
             if 0 <= x < w:
                 p.fillRect(QRect(x, 0, 1, h), QColor(theme.PLAYHEAD))
             # minimap: whole file, visible window, playhead tick
-            p.fillRect(QRect(0, 0, w, self.MINIMAP_H), QColor(theme.MINIMAP_TRACK))
             scale = (w - 1) / self.duration
             vx1, vx2 = self.view_start * scale, self.view_end * scale
-            p.fillRect(QRectF(vx1, 0, max(2.0, vx2 - vx1 + 1), self.MINIMAP_H), QColor(theme.MINIMAP_VIEW))
+            # T112: track and visible-window slider only when the timeline is zoomed;
+            # unzoomed the strip is the timeline background, only the playhead tick stays
+            if self.is_zoomed():
+                p.fillRect(QRect(0, 0, w, self.MINIMAP_H), QColor(theme.MINIMAP_TRACK))
+                p.fillRect(QRectF(vx1, 0, max(2.0, vx2 - vx1 + 1), self.MINIMAP_H),
+                           QColor(theme.MINIMAP_VIEW))
             p.fillRect(QRect(round(self.position * scale), 0, 1, self.MINIMAP_H + 1), QColor(theme.PLAYHEAD))
         p.end()
 

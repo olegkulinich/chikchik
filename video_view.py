@@ -41,6 +41,7 @@ class VideoView(QOpenGLWidget):
     scrub_moved = Signal(int)          # frames from where the scrub started
     scrub_finished = Signal()
     menu_requested = Signal(QPoint)    # global position
+    zoomed = Signal()                  # T101: the user changed the canvas zoom (wheel)
     _frame_ready = Signal()
     _seek_done = Signal()              # from mpv's event thread → GUI thread
     _display_changed = Signal()        # dwidth/dheight arrived → re-apply zoom
@@ -295,7 +296,25 @@ class VideoView(QOpenGLWidget):
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(shown.adjusted(0.5, 0.5, -0.5, -0.5))
+        line = shown.adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.drawRect(line)
+        if self.crop_enabled:
+            self._paint_handles(painter, line)
+
+    HANDLE = 7          # T108: corner squares, odd → centred on the 1 px line (3 px each side)
+
+    def _paint_handles(self, painter: QPainter, line: QRectF) -> None:
+        """T108: white squares with a 1 px crop-colour stroke on the 4 corners. Whole
+        where the widget has room (grey surround, zoom); clipped at its edges."""
+        half = self.HANDLE // 2
+        stroke, fill = QColor(theme.CROP), QColor(theme.CROP_HANDLE)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for corner in (line.topLeft(), line.topRight(), line.bottomLeft(), line.bottomRight()):
+            # the pixel the 1 px line passes through at this corner
+            cx, cy = math.floor(corner.x()), math.floor(corner.y())
+            outer = QRect(cx - half, cy - half, self.HANDLE, self.HANDLE)
+            painter.fillRect(outer, stroke)
+            painter.fillRect(outer.adjusted(1, 1, -1, -1), fill)
 
     # ------------------------------------------------------ geometry
     def display_size(self) -> tuple[int, int]:
@@ -316,6 +335,11 @@ class VideoView(QOpenGLWidget):
 
     def zoom_scale(self) -> float:
         return self.fit_scale() if self._scale is None else self._scale
+
+    def zoom_text(self) -> str:
+        """T101: the canvas zoom for the toast — `250%`, at fit `Fit · 43%`."""
+        percent = f"{self.zoom_scale() * 100:.0f}%"
+        return f"Fit · {percent}" if self._scale is None else percent
 
     def is_fit(self) -> bool:
         return self._scale is None
@@ -1176,6 +1200,7 @@ class VideoView(QOpenGLWidget):
                 self._apply_zoom()
         elif delta.y():
             self.zoom_by(delta.y() / 120, event.position())
+            self.zoomed.emit()
         event.accept()
 
     def contextMenuEvent(self, event) -> None:
