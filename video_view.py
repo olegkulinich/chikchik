@@ -41,6 +41,7 @@ class VideoView(QOpenGLWidget):
     scrub_moved = Signal(int)          # frames from where the scrub started
     scrub_finished = Signal()
     menu_requested = Signal(QPoint)    # global position
+    zoomed = Signal()                  # T101: the user changed the canvas zoom (wheel)
     _frame_ready = Signal()
     _seek_done = Signal()              # from mpv's event thread → GUI thread
     _display_changed = Signal()        # dwidth/dheight arrived → re-apply zoom
@@ -316,6 +317,11 @@ class VideoView(QOpenGLWidget):
 
     def zoom_scale(self) -> float:
         return self.fit_scale() if self._scale is None else self._scale
+
+    def zoom_text(self) -> str:
+        """T101: the canvas zoom for the toast — `250%`, at fit `Fit · 43%`."""
+        percent = f"{self.zoom_scale() * 100:.0f}%"
+        return f"Fit · {percent}" if self._scale is None else percent
 
     def is_fit(self) -> bool:
         return self._scale is None
@@ -1176,6 +1182,7 @@ class VideoView(QOpenGLWidget):
                 self._apply_zoom()
         elif delta.y():
             self.zoom_by(delta.y() / 120, event.position())
+            self.zoomed.emit()
         event.accept()
 
     def contextMenuEvent(self, event) -> None:

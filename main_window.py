@@ -648,6 +648,7 @@ class MainWindow(QMainWindow):
         self.video.scrub_moved.connect(self._video_scrub_move)
         self.video.scrub_finished.connect(self._video_scrub_end)
         self.video.menu_requested.connect(self.show_menu)
+        self.video.zoomed.connect(self._zoom_toast)                      # T101
         root.addWidget(self.video, 1)
         self._video_gap = QSpacerItem(0, theme.GAP)
         root.addItem(self._video_gap)
@@ -2825,11 +2826,18 @@ class MainWindow(QMainWindow):
     def zoom_fit(self) -> None:
         if self.info is not None:
             self.video.zoom_fit()
+            self._zoom_toast()
 
     def zoom_actual(self) -> None:
         if self.info is not None:
             self.video.zoom_actual()
-            self.toast.show_message("100%", action=False, ms=1200)
+            self._zoom_toast()
+
+    def _zoom_toast(self) -> None:
+        """T101: every zoom step (wheel, Ctrl+0, Ctrl+1) shows the zoom; one toast,
+        updated in place."""
+        if self.info is not None and self.video.has_video:
+            self.toast.show_message(self.video.zoom_text(), action=False, ms=1200)
 
     def _stem(self) -> str:
         """Base name for exports: the file's stem, or the sequence name (shot_#### → shot)."""
