@@ -175,10 +175,12 @@ class VideoView(QOpenGLWidget):
     CORNER_ZONE = 9         # screen px around the corners (≥ half of the T108 handle + edge)
     MIN_CROP = 4            # frame px — the smallest rect drawn or resized
     WARP = 100              # T100: px from the press before the hidden cursor is put back
-    try:   # T100 hidden switch: screen px per frame of the scrub on the video (1–10)
-        SCRUB_PX = max(1, min(10, int(os.environ.get("QTC_SCRUB_PX", "1"))))
+    # T100 hidden switch: screen px per frame of the scrub on the video (1–30). Default 10
+    # (user, D build 1 check): at 1–3 the smallest hand move on a high-DPI mouse is a frame.
+    try:
+        SCRUB_PX = max(1, min(30, int(os.environ.get("QTC_SCRUB_PX", "10"))))
     except ValueError:
-        SCRUB_PX = 1
+        SCRUB_PX = 10
     ZOOM_STEP = 1.25        # per wheel notch, as on the timeline
     MAX_SCALE = 32.0        # device px per video px
     # ------------------------------------------------------------ GL
