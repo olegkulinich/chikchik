@@ -606,7 +606,10 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
 
         self.video = VideoView()
-        self._muted = False                      # T66: not remembered — a file never opens silent
+        self._muted = self.config.flag("muted")  # remembered (user, T67 build 2)
+        self._muted_told = False                 # "Muted" toast shown for this file
+        if self._muted:
+            self.video.set_mute(True)
         self.video.set_volume(self._volume())
         startup_log.mark("UI: VideoView (mpv core)")
         if self._preload is not None:
@@ -1192,9 +1195,24 @@ class MainWindow(QMainWindow):
         except ValueError:
             return 100
 
+    def _set_muted(self, on: bool) -> None:
+        self._muted = on
+        self._muted_told = True                  # the user knows: no reminder toast
+        self.config.set_flag("muted", on)
+        self.video.set_mute(on)
+
+    def _remind_muted(self) -> None:
+        """Playback started on a muted file with sound: a "Muted" toast, once per file,
+        a moment later — not on the way of the first frame."""
+        if self._muted and not self._muted_told and self.info is not None \
+                and self.info.audio and self._jkl is None:
+            self._muted_told = True
+            QTimer.singleShot(400, lambda: self.toast.show_message(
+                "Muted", action=False, ms=1500) if self._muted and self._jkl is None
+                and self.video.playing else None)
+
     def toggle_mute(self) -> None:
-        self._muted = not self._muted
-        self.video.set_mute(self._muted)
+        self._set_muted(not self._muted)
         self.toast.show_message("Muted" if self._muted else f"Volume {self._volume()}%",
                                 action=False, ms=1200)
 
@@ -1204,8 +1222,7 @@ class MainWindow(QMainWindow):
         self.config.set("volume", str(volume))
         self.video.set_volume(volume)
         if self._muted:
-            self._muted = False
-            self.video.set_mute(False)
+            self._set_muted(False)
         self.toast.show_message(f"Volume {volume}%", action=False, ms=1200)
 
     # ============================================================== menu
@@ -1402,6 +1419,8 @@ class MainWindow(QMainWindow):
             path = sequence.first_file if keep is None else path
 
         self.source, self.info = path, info
+        if keep is None:
+            self._muted_told = False             # a new file: remind once again
         if sequence is not None:
             if self._mpv_list is not None:
                 self._remove(self._mpv_list)
@@ -1479,7 +1498,10 @@ class MainWindow(QMainWindow):
         self.video.toggle_pause()
 
     def _sync_play(self) -> None:
-        self.play_button.setChecked(self.video.playing)
+        playing = self.video.playing
+        self.play_button.setChecked(playing)
+        if playing and self._muted and not self._muted_told:
+            self._remind_muted()
 
     def _poll(self) -> None:
         if perf_log.ENABLED:

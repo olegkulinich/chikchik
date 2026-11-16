@@ -21,7 +21,9 @@ DEFAULTS = {
     "frames_mode": "0",      # T39: show frames instead of timecode
     "pin_on_top": "0",       # T45: window stays above others (remembered)
     "loop": "0",             # T53: ∞ remembered between launches
-    "volume": "100",         # T66: 0–100, remembered (mute is not)
+    "volume": "100",         # T66: 0–100, remembered
+    "muted": "0",            # T67 build 2 (user): remembered too; a "Muted" toast on play
+    "sequence_fps": "25",    # T67 build 2 (user): the last rate set for a sequence
 }
 
 
