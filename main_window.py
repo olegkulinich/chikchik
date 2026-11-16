@@ -666,8 +666,12 @@ class MainWindow(QMainWindow):
             self.time_field.prefix.ensurePolished()     # the stylesheet font, as painted
             QFontMetrics(self.time_field.prefix.font()).horizontalAdvance("⌛")
             startup_log.mark("UI: transport · ⌛ glyph measured")
+        # T102 (b): ⌛ 2 px left, the value 5 px left — the glyph has its own side
+        # bearings; this lines both up with In below
+        self.time_field.layout().setContentsMargins(6, 0, 8, 0)
+        self.time_field.layout().setSpacing(3)
         self.time_field.setToolTip("Current time")
-        self.time_field.setText("00:00.000")
+        self.time_field.setText("00:00:00:00")   # T102 (a)
         self.time_field.committed.connect(self._time_field_committed)
         self.time_field.nudged.connect(self._nudge_position)
         self.time_field.scrub_started.connect(self.video.pause)
@@ -1949,6 +1953,14 @@ class MainWindow(QMainWindow):
         if self.info is None:
             return None
         text = text.strip().replace("\u2212", "-").replace(",", ".")
+        # T102 fix: "+30" typed after the shown value ("00:08:56:05+30") — the part
+        # before the sign is the start; "+30" alone starts from `base`
+        tail = re.fullmatch(r"(.*[^\s+-])\s*([+-][^+-]*)", text)
+        if tail and base is not None:
+            start = self._parse(tail.group(1), length)
+            if start is None:
+                return None
+            base, text = start, tail.group(2).strip()
         sign = 0
         if text and text[0] in "+-":
             sign = 1 if text[0] == "+" else -1

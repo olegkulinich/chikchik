@@ -59,10 +59,10 @@ def parse(text: str, base: int, drop: int, offset: bool = False) -> int | None:
 
     "1:3::16" (empty / missing parts are zeros; the right-most part is frames) and
     plain digits read in pairs from the right, like AE / Resolve: "120" = 1 s 20 f,
-    "10000" = 1 min. Seconds and minutes must be < 60 and frames < base, so a
-    YouTube-style "1:30" at 25 fps is an error rather than a silent 2 s 05 f.
-    offset=True (a "+10" / "-10" step): parts carry over ("+30" at 25 fps = 30 frames)
-    and the result is a plain frame count, no drop-frame labels.
+    "10000" = 1 min. Parts carry over (Premiere / Resolve): "1:30" at 25 fps =
+    2 s 05 f, "+30" = 30 frames; only text that isn't a timecode is an error.
+    offset=True (a "+10" / "-10" step): the result is a plain frame count, no
+    drop-frame labels.
     """
     text = text.strip()
     if not text:
@@ -83,8 +83,7 @@ def parse(text: str, base: int, drop: int, offset: bool = False) -> int | None:
     h, m, s, f = values
     if offset:
         return ((h * 60 + m) * 60 + s) * base + f
-    if m >= 60 or s >= 60 or f >= base:
-        return None
+    h, m, s, f = split(((h * 60 + m) * 60 + s) * base + f, base)   # carry over
     if drop and s == 0 and m % 10 and f < drop:   # a skipped label → the next real one
         f = drop
     return nominal_to_frame(((h * 60 + m) * 60 + s) * base + f, base, drop)
