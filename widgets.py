@@ -802,7 +802,10 @@ class Timeline(QWidget):
             p.fillRect(QRect(0, 0, w, self.MINIMAP_H), QColor(theme.MINIMAP_TRACK))
             scale = (w - 1) / self.duration
             vx1, vx2 = self.view_start * scale, self.view_end * scale
-            p.fillRect(QRectF(vx1, 0, max(2.0, vx2 - vx1 + 1), self.MINIMAP_H), QColor(theme.MINIMAP_VIEW))
+            # T112: the visible-window slider stands out only when the timeline is zoomed
+            if self.is_zoomed():
+                p.fillRect(QRectF(vx1, 0, max(2.0, vx2 - vx1 + 1), self.MINIMAP_H),
+                           QColor(theme.MINIMAP_VIEW))
             p.fillRect(QRect(round(self.position * scale), 0, 1, self.MINIMAP_H + 1), QColor(theme.PLAYHEAD))
         p.end()
 
