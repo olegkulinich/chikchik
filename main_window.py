@@ -403,8 +403,9 @@ class _TitleStrip(QWidget):
 
 
 class _Central(QWidget):
-    """Presses in the margin around the video start a crop frame too (1.9b) —
-    matters when the picture fills the whole width and there are no black bars."""
+    """Presses in the margin around the video go to it too (1.9b) — matter when the
+    picture fills the whole width and there are no black bars: a frame drawn from
+    the very edge, the crop edge zones (T52), the frame scrub (T100)."""
 
     BAND = 8
 
@@ -412,30 +413,40 @@ class _Central(QWidget):
         super().__init__()
         self.video: VideoView | None = None
         self._forward = False
+        self.setMouseTracking(True)      # T52: resize cursors over the band too
 
     def _mapped(self, event) -> QPointF:
         return QPointF(self.video.mapFrom(self, event.position().toPoint()))
 
-    def mousePressEvent(self, event) -> None:
+    def _in_band(self, event) -> bool:
         video = self.video
-        if video is not None and video.has_video and event.button() == Qt.MouseButton.LeftButton:
-            area = video.geometry().adjusted(-self.BAND, -self.BAND, self.BAND, self.BAND)
-            if area.contains(event.position().toPoint()):
-                self._forward = True
-                video.press_at(self._mapped(event))
-                return
+        if video is None or not video.has_video or not video.isVisible():
+            return False
+        area = video.geometry().adjusted(-self.BAND, -self.BAND, self.BAND, self.BAND)
+        return area.contains(event.position().toPoint())
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._in_band(event):
+            self._forward = True
+            self.video.press_at(self._mapped(event), event)
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._forward:
-            self.video.move_to(self._mapped(event))
+            self.video.move_to(self._mapped(event), event)
             return
+        if not event.buttons():
+            if self._in_band(event):
+                self.setCursor(self.video.cursor_at(self._mapped(event), event.modifiers()))
+            elif self.testAttribute(Qt.WidgetAttribute.WA_SetCursor):
+                self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if self._forward and event.button() == Qt.MouseButton.LeftButton:
             self._forward = False
-            self.video.release_at(self._mapped(event))
+            self.video.release_at(self._mapped(event), event)
             return
         super().mouseReleaseEvent(event)
 
@@ -481,9 +492,13 @@ class MainWindow(QMainWindow):
         self._nudge_target = 0.0
         self._nudge_stamp = 0.0
         self._scrub_active = False
+        self._video_scrub = False           # T100: drag on the video scrubs frames
+        self._video_scrub_t0 = 0.0
+        self._video_scrub_t: float | None = None
         self._hold_target = 0.0
         self._hold_until = 0.0
         self._edge_return: float | None = None
+        self._crop_aspect: tuple[float, QRect] | None = None   # T70: (proportion, rect it made)
         self._quiet = False                 # programmatic Trim/Crop toggles: no capture/reset
         self._applying = False              # applying an undo step: no history writes
 
@@ -628,6 +643,10 @@ class MainWindow(QMainWindow):
                                sequence_fps=self._sequence_fps() if sequence else None)
         central.video = self.video
         self.video.crop_drawn.connect(self._crop_drawn)
+        self.video.crop_changing.connect(self._crop_changing)
+        self.video.scrub_started.connect(self._video_scrub_begin)
+        self.video.scrub_moved.connect(self._video_scrub_move)
+        self.video.scrub_finished.connect(self._video_scrub_end)
         self.video.menu_requested.connect(self.show_menu)
         root.addWidget(self.video, 1)
         self._video_gap = QSpacerItem(0, theme.GAP)
@@ -657,6 +676,7 @@ class MainWindow(QMainWindow):
         self.timeline.edge_preview.connect(self._edge_preview)
         self.timeline.in_dragged.connect(lambda t: self.set_in(t, step=False))
         self.timeline.out_dragged.connect(lambda t: self.set_out(t, step=False))
+        self.timeline.range_moved.connect(self._range_moved)
         startup_log.mark("UI: transport · Timeline")
         self.time_field = Field("⌛", 110)   # emoji, like the app icon
         startup_log.mark("UI: transport · ⌛ Field")
@@ -719,7 +739,7 @@ class MainWindow(QMainWindow):
         bottom.addSpacing(theme.GAP2 - theme.HGAP)   # T34b: 16 px between Trim and Crop
 
         self.crop_button = button("Crop", checkable=True,
-                                  tooltip="Drag on the video to draw a frame")
+                                  tooltip="Drag on the video to draw a new frame")
         self.crop_button.toggled.connect(self._crop_toggled)
         bottom.addWidget(self.crop_button)
         self.crop_fields = {}
@@ -960,7 +980,7 @@ class MainWindow(QMainWindow):
     TIPS = {"play_button": ("Play / Pause", "play", ""),
             "loop_button": ("Loop", "loop", ""),
             "trim_button": ("Trim", "trim", "Export only the In–Out range (off: the whole file)"),
-            "crop_button": ("Crop", "crop", "Drag on the video\nto draw a frame")}   # even lines
+            "crop_button": ("Crop", "crop", "Drag on the video\nto draw a new frame")}   # even lines
 
     def _update_tooltips(self) -> None:
         """T48 (B2): the current key (follows remapping) grey at the end of existing
@@ -1523,7 +1543,8 @@ class MainWindow(QMainWindow):
         position = self.video.time_pos
         if position is None:
             return
-        if self.timeline.is_dragging() or (self.video.seek_busy() and not self._jkl_seeking()):
+        if self.timeline.is_dragging() or self._video_scrub \
+                or (self.video.seek_busy() and not self._jkl_seeking()):
             # The playhead follows the mouse / the requested target, not mpv: while a
             # seek runs, mpv still reports the old position (made ⌛ scrub jitter, 4.1.1).
             return
@@ -1586,11 +1607,37 @@ class MainWindow(QMainWindow):
             self._kf_drag = False
             self._exact_timer.stop()
 
+    # T100: drag on the video with Crop off = frame scrub, the same seeks as Alt+Drag on
+    # the timeline (exact, playback goes on as it does there), relative to the playhead.
+    def _video_scrub_begin(self) -> None:
+        if self.info is None:
+            return
+        self._video_scrub = True
+        self._video_scrub_t0 = self._snap(self.timeline.position)
+        self._video_scrub_t = None
+
+    def _video_scrub_move(self, frames: int) -> None:
+        if not self._video_scrub:
+            return
+        t = max(0.0, min(self.info.duration, self._video_scrub_t0 + frames * self._step(False)))
+        if self._video_scrub_t is not None and abs(t - self._video_scrub_t) < 1e-9:
+            return
+        self._video_scrub_t = t
+        self._timeline_seek(t, False)
+
+    def _video_scrub_end(self) -> None:
+        if not self._video_scrub:
+            return
+        t = self._video_scrub_t
+        if t is not None:
+            self._timeline_seek(t, True)
+        self._video_scrub = False
+
     def _exact_scrub(self) -> bool:
         """T9 / 1b: keyframe seeks are fastest across the whole file, but zoomed in the
         whole drag fits between two keyframes (every 2–10 s in films) and the picture
         wouldn't change — there, seek exactly (the queue keeps the UI smooth)."""
-        if self.info.intra_only or self.timeline.fine:     # Alt+drag: always exact
+        if self.info.intra_only or self.timeline.fine or self._video_scrub:   # Alt / T100: exact
             return True
         span = self.timeline.view_end - self.timeline.view_start
         frames_per_px = span / self._step(False) / max(1, self.timeline.width())
@@ -1680,6 +1727,19 @@ class MainWindow(QMainWindow):
         self._show_times()
         if step:
             self._history_commit()
+
+    def _range_moved(self, t_in: float, final: bool) -> None:
+        """T51: Ctrl+Drag on the timeline moves Trim as a whole (length kept, stops at
+        the file edge); the picture shows the In frame, release → back (T8)."""
+        if not self._editable():
+            return
+        length = self.trim_out - self.trim_in
+        t_in = self._snap(max(0.0, min(self.info.duration - length, t_in)))
+        if t_in + length > self.info.duration + 1e-9:
+            t_in = self._snap(t_in - self._step(False))
+        self.trim_in, self.trim_out = t_in, min(self.info.duration, t_in + length)
+        self._show_times()
+        self._edge_preview(self.trim_in, final)
 
     def _time_committed(self, field: Field, text: str, is_in: bool) -> None:
         if self.info is None:
@@ -2050,6 +2110,15 @@ class MainWindow(QMainWindow):
         self._reencode_changed("crop")
         self._history_commit()
 
+    def _crop_changing(self, rect: QRect) -> None:
+        """D: the fields follow the rect while it is dragged; history on release."""
+        if self.info is None or self.worker is not None:
+            return
+        values = {"X": rect.x(), "Y": rect.y(), "W": rect.width(), "H": rect.height()}
+        for key, field in self.crop_fields.items():
+            field.setText(str(values[key]))
+            field.set_error(False)
+
     def _crop_field_committed(self, key: str, text: str) -> None:
         if self.info is None:
             return
@@ -2065,9 +2134,42 @@ class MainWindow(QMainWindow):
     def _nudge_crop(self, key: str, steps: int, coarse: bool) -> None:
         if self.info is None:
             return
+        if coarse and key in ("W", "H"):
+            self._nudge_crop_aspect(key, steps)    # T70: Shift on W/H = proportions, step ×1
+            return
         current = {"X": self.crop.x(), "Y": self.crop.y(),
                    "W": self.crop.width(), "H": self.crop.height()}[key]
         self._apply_crop_value(key, current + steps * (10 if coarse else 1))
+
+    def _nudge_crop_aspect(self, key: str, steps: int) -> None:
+        """T70: Shift on W/H (drag, wheel, ↑/↓) keeps proportions, step ×1; X/Y
+        (top-left) stay. A run of steps keeps the proportion of its first step, so
+        rounding doesn't drift; any other change of the rect starts a new run."""
+        if self.info is None or self.crop.isNull():
+            return
+        r = QRect(self.crop)
+        if self._crop_aspect is not None and self._crop_aspect[1] == r:
+            ratio = self._crop_aspect[0]
+        else:
+            ratio = r.width() / r.height() if r.height() else 1.0
+        fw, fh = self.info.width, self.info.height
+        w_room, h_room = fw - r.x(), fh - r.y()
+        if key == "W":
+            w = max(2.0, min(r.width() + steps, w_room, h_room * ratio))
+            h = w / ratio
+        else:
+            h = max(2.0, min(r.height() + steps, h_room, w_room / ratio))
+            w = h * ratio
+        r.setWidth(max(2, min(w_room, round(w))))
+        r.setHeight(max(2, min(h_room, round(h))))
+        self._crop_aspect = (ratio, QRect(r))
+        self.crop = r
+        self.video.set_crop(r)
+        if not self.crop_button.isChecked():
+            self._set_checked(self.crop_button, True)
+            self.video.set_crop_enabled(True)
+        self._show_crop()
+        self._reencode_changed("crop")
 
     def _apply_crop_value(self, key: str, value: int) -> None:
         r = QRect(self.crop)

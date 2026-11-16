@@ -7,12 +7,14 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QOpenGLContext, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QCursor, QOpenGLContext, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QApplication
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 import perf_log
 import startup_log
 import theme
+from widgets import _is_pen
 
 
 def _gl_renderer() -> str:
@@ -33,7 +35,11 @@ def _silence_minutes() -> float:
 
 
 class VideoView(QOpenGLWidget):
-    crop_drawn = Signal(QRect)         # new crop rect in frame pixels (drag draws, click doesn't)
+    crop_drawn = Signal(QRect)         # new crop rect in frame pixels (draw / move / resize, on release)
+    crop_changing = Signal(QRect)      # D: the rect while it is dragged (fields follow, no history)
+    scrub_started = Signal()           # T100: drag on the video with Crop off
+    scrub_moved = Signal(int)          # frames from where the scrub started
+    scrub_finished = Signal()
     menu_requested = Signal(QPoint)    # global position
     _frame_ready = Signal()
     _seek_done = Signal()              # from mpv's event thread → GUI thread
@@ -137,6 +143,16 @@ class VideoView(QOpenGLWidget):
         self._draft: QRect | None = None
         self._press: QPointF | None = None
         self._press_frame: QPointF | None = None
+        self._press_raw = QPointF()      # D: press in frame px, not clamped (move / resize deltas)
+        self._press_global = QPoint()
+        self._press_pen = False
+        self._gesture: str | None = None   # "draw" | "move" | "resize" | "scrub"
+        self._edges: tuple[str | None, str | None] = (None, None)   # T52: ("L"/"R", "T"/"B")
+        self._rect0 = QRectF()
+        self._scrubbing = False
+        self._scrub_acc = 0.0
+        self._scrub_last_x = 0.0
+        self._scrub_frames = 0
         self._scrub_mode = False
         self._light = False
         self._stepping_until = 0.0
@@ -153,6 +169,16 @@ class VideoView(QOpenGLWidget):
             self._upscale = "bilinear"
 
     DRAG_THRESHOLD = 5      # px before a press becomes a crop drag
+    EDIT_THRESHOLD = 2      # px before a press on the frame / with Ctrl moves or resizes it
+    SCRUB_START = 3         # px before a press with Crop off becomes a frame scrub
+    EDGE_ZONE = 6           # T52: screen px around the crop edges (same at any zoom)
+    CORNER_ZONE = 9         # screen px around the corners (≥ half of the T108 handle + edge)
+    MIN_CROP = 4            # frame px — the smallest rect drawn or resized
+    WARP = 100              # T100: px from the press before the hidden cursor is put back
+    try:   # T100 hidden switch: screen px per frame of the scrub on the video (1–10)
+        SCRUB_PX = max(1, min(10, int(os.environ.get("QTC_SCRUB_PX", "1"))))
+    except ValueError:
+        SCRUB_PX = 1
     ZOOM_STEP = 1.25        # per wheel notch, as on the timeline
     MAX_SCALE = 32.0        # device px per video px
     # ------------------------------------------------------------ GL
@@ -419,11 +445,15 @@ class VideoView(QOpenGLWidget):
         self._apply_zoom()
 
     def view_to_frame(self, point: QPointF) -> QPointF:
+        fw, fh = self.frame_size
+        raw = self._view_to_frame_raw(point)
+        return QPointF(max(0.0, min(fw, raw.x())), max(0.0, min(fh, raw.y())))
+
+    def _view_to_frame_raw(self, point: QPointF) -> QPointF:
         vr = self.video_rect()
         fw, fh = self.frame_size
-        x = (point.x() - vr.x()) / vr.width() * fw
-        y = (point.y() - vr.y()) / vr.height() * fh
-        return QPointF(max(0.0, min(fw, x)), max(0.0, min(fh, y)))
+        return QPointF((point.x() - vr.x()) / vr.width() * fw,
+                       (point.y() - vr.y()) / vr.height() * fh)
 
     def frame_to_view(self, rect: QRect) -> QRectF:
         vr = self.video_rect()
@@ -875,6 +905,9 @@ class VideoView(QOpenGLWidget):
             pass
 
     # --------------------------------------------------------- mouse
+    # D (T100, T51, T52, D1.1): Crop off → drag = frame scrub. Crop on → a press on
+    # an edge / corner resizes (Shift keeps proportions, Alt from the centre),
+    # Ctrl+press anywhere moves the rect, any other press draws a new one.
     def set_crop_enabled(self, enabled: bool) -> None:
         self.crop_enabled = enabled
         self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
@@ -884,38 +917,228 @@ class VideoView(QOpenGLWidget):
         self.crop = QRect(rect)
         self.update()
 
+    def _zone_at(self, pos: QPointF) -> tuple[str | None, str | None] | None:
+        """T52: the edge / corner under pos (screen px zones), nearest one wins."""
+        if not self.crop_enabled or self.crop.isNull() or not self.has_video:
+            return None
+        r = self.frame_to_view(self.crop)
+        x, y = pos.x(), pos.y()
+        best, best_d = None, None
+        for hx, cx in (("L", r.left()), ("R", r.right())):
+            for hy, cy in (("T", r.top()), ("B", r.bottom())):
+                if abs(x - cx) <= self.CORNER_ZONE and abs(y - cy) <= self.CORNER_ZONE:
+                    d = math.hypot(x - cx, y - cy)
+                    if best_d is None or d < best_d:
+                        best, best_d = (hx, hy), d
+        if best is not None:
+            return best
+        z = self.EDGE_ZONE
+        if r.top() - z <= y <= r.bottom() + z:
+            for hx, cx in (("L", r.left()), ("R", r.right())):
+                if abs(x - cx) <= z and (best_d is None or abs(x - cx) < best_d):
+                    best, best_d = (hx, None), abs(x - cx)
+        if r.left() - z <= x <= r.right() + z:
+            for hy, cy in (("T", r.top()), ("B", r.bottom())):
+                if abs(y - cy) <= z and (best_d is None or abs(y - cy) < best_d):
+                    best, best_d = (None, hy), abs(y - cy)
+        return best
+
+    _ZONE_CURSORS = {
+        ("L", "T"): Qt.CursorShape.SizeFDiagCursor, ("R", "B"): Qt.CursorShape.SizeFDiagCursor,
+        ("R", "T"): Qt.CursorShape.SizeBDiagCursor, ("L", "B"): Qt.CursorShape.SizeBDiagCursor,
+        ("L", None): Qt.CursorShape.SizeHorCursor, ("R", None): Qt.CursorShape.SizeHorCursor,
+        (None, "T"): Qt.CursorShape.SizeVerCursor, (None, "B"): Qt.CursorShape.SizeVerCursor,
+    }
+
+    def cursor_at(self, pos: QPointF, modifiers) -> Qt.CursorShape:
+        """Hover cursor (also asked by the window for its band around the view)."""
+        if not self.crop_enabled or not self.has_video:
+            return Qt.CursorShape.ArrowCursor
+        if modifiers & Qt.KeyboardModifier.ControlModifier and not self.crop.isNull():
+            return Qt.CursorShape.SizeAllCursor
+        zone = self._zone_at(pos)
+        return self._ZONE_CURSORS[zone] if zone else Qt.CursorShape.CrossCursor
+
+    def hover_at(self, pos: QPointF, modifiers) -> None:
+        if self._press is None and self._pan is None:
+            shape = self.cursor_at(pos, modifiers)
+            if self.cursor().shape() != shape:
+                self.setCursor(shape)
+
     # A press anywhere — in the black bars or (forwarded by the window) in the
-    # margin around the view — starts a frame; the start point snaps to the
-    # nearest edge/corner, so a frame from the very edge is easy to draw.
-    def press_at(self, pos: QPointF) -> None:
+    # margin around the view — starts a gesture; a drawn frame's start point is
+    # clamped to the frame, so a frame from the very edge is easy to draw.
+    def press_at(self, pos: QPointF, event=None) -> None:
         if not self.has_video:
             return
+        modifiers = event.modifiers() if event is not None else Qt.KeyboardModifier.NoModifier
         self._press = QPointF(pos)
         self._press_frame = self.view_to_frame(pos)
+        self._press_raw = self._view_to_frame_raw(pos)
+        self._press_global = (event.globalPosition().toPoint() if event is not None
+                              else self.mapToGlobal(pos.toPoint()))
+        self._press_pen = event is not None and _is_pen(event)
         self._draft = None
+        self._rect0 = QRectF(self.crop)
+        if not self.crop_enabled:
+            self._gesture = "scrub"
+            self._scrubbing = False
+        elif modifiers & Qt.KeyboardModifier.ControlModifier and not self.crop.isNull():
+            self._gesture = "move"                                   # T51
+        else:
+            zone = self._zone_at(pos)
+            self._gesture = "resize" if zone else "draw"             # T52 / D1.1
+            self._edges = zone or (None, None)
 
-    def move_to(self, pos: QPointF) -> None:
-        if self._press_frame is None:
+    def move_to(self, pos: QPointF, event=None) -> None:
+        modifiers = event.modifiers() if event is not None else Qt.KeyboardModifier.NoModifier
+        if self._press is None:
+            self.hover_at(pos, modifiers)
             return
-        if self._draft is None and (pos - self._press).manhattanLength() < self.DRAG_THRESHOLD:
+        gesture = self._gesture
+        if gesture == "scrub":
+            self._scrub_move(pos, event)
             return
-        current = self.view_to_frame(pos)
-        self._draft = QRectF(self._press_frame, current).normalized().toRect()
+        threshold = self.DRAG_THRESHOLD if gesture == "draw" else self.EDIT_THRESHOLD
+        if self._draft is None and (pos - self._press).manhattanLength() < threshold:
+            return
+        if gesture == "draw":
+            current = self.view_to_frame(pos)
+            self._draft = QRectF(self._press_frame, current).normalized().toRect()
+        elif gesture == "move":
+            self._draft = self._moved(self._view_to_frame_raw(pos))
+        else:
+            self._draft = self._resized(self._view_to_frame_raw(pos), modifiers)
+        if gesture != "draw" or (self._draft.width() >= self.MIN_CROP
+                                 and self._draft.height() >= self.MIN_CROP):
+            self.crop_changing.emit(QRect(self._draft))
         self.update()
 
-    def release_at(self, pos: QPointF) -> None:
+    def release_at(self, pos: QPointF, event=None) -> None:
         if self._press is None:
             return
-        draft = self._draft
-        if draft is not None and draft.width() >= 4 and draft.height() >= 4:
-            self.crop = draft
-            self.crop_drawn.emit(QRect(draft))
+        gesture, draft = self._gesture, self._draft
+        if gesture == "scrub":
+            self._scrub_end()
+        elif draft is not None:
+            if gesture == "draw":
+                ok = draft.width() >= self.MIN_CROP and draft.height() >= self.MIN_CROP
+            else:
+                ok = draft != self.crop
+            if ok:
+                self.crop = draft
+                self.crop_drawn.emit(QRect(draft))
+            else:
+                self.crop_changing.emit(QRect(self.crop))   # fields back to the kept rect
         self._press = self._press_frame = self._draft = None
+        self._gesture = None
         self.update()
+        self.hover_at(pos, QApplication.keyboardModifiers())
+
+    # --- T51: move the rect by the same picture px, stops at the frame edge
+    def _moved(self, raw: QPointF) -> QRect:
+        fw, fh = self.frame_size
+        r0 = self._rect0
+        left = max(0.0, min(fw - r0.width(), r0.left() + raw.x() - self._press_raw.x()))
+        top = max(0.0, min(fh - r0.height(), r0.top() + raw.y() - self._press_raw.y()))
+        return QRect(round(left), round(top), round(r0.width()), round(r0.height()))
+
+    # --- T52 / D1.3: edges and corners; Shift = keep proportions (an edge changes the
+    # other side symmetrically around the centre line, like Figma), Alt = from centre.
+    def _resized(self, raw: QPointF, modifiers) -> QRect:
+        fw, fh = self.frame_size
+        r0 = self._rect0
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+        hx, hy = self._edges
+
+        def axis(edge, lo0, size0, delta):
+            """(new size, anchor: "lo" | "hi" | "mid", active)"""
+            if edge is None:
+                return size0, ("mid" if shift else "lo"), False
+            k = 2 if alt else 1
+            if edge in ("L", "T"):
+                return size0 - delta * k, ("mid" if alt else "hi"), True
+            return size0 + delta * k, ("mid" if alt else "lo"), True
+
+        def room(anchor, lo0, size0, limit):
+            if anchor == "lo":
+                return limit - lo0
+            if anchor == "hi":
+                return lo0 + size0
+            centre = lo0 + size0 / 2
+            return 2 * min(centre, limit - centre)
+
+        def place(anchor, lo0, size0, size):
+            if anchor == "lo":
+                return lo0
+            if anchor == "hi":
+                return lo0 + size0 - size
+            return lo0 + size0 / 2 - size / 2
+
+        w0, h0 = r0.width(), r0.height()
+        w, ax, act_x = axis(hx, r0.left(), w0, raw.x() - self._press_raw.x())
+        h, ay, act_y = axis(hy, r0.top(), h0, raw.y() - self._press_raw.y())
+        w_room = room(ax, r0.left(), w0, fw)
+        h_room = room(ay, r0.top(), h0, fh)
+        if shift and w0 > 0 and h0 > 0:
+            if act_x and act_y:
+                s = max(w / w0, h / h0)
+            else:
+                s = w / w0 if act_x else h / h0
+            s = max(s, self.MIN_CROP / w0, self.MIN_CROP / h0)
+            s = min(s, w_room / w0, h_room / h0)
+            w, h = w0 * s, h0 * s
+        else:
+            w = max(self.MIN_CROP, min(w, w_room))
+            h = max(self.MIN_CROP, min(h, h_room))
+        left = place(ax, r0.left(), w0, w)
+        top = place(ay, r0.top(), h0, h)
+        rect = QRect(round(left), round(top), max(1, round(w)), max(1, round(h)))
+        rect.moveLeft(max(0, min(rect.left(), fw - rect.width())))
+        rect.moveTop(max(0, min(rect.top(), fh - rect.height())))
+        return rect
+
+    # --- T100: endless frame scrub, like Alt+Drag on the timeline / the fields
+    def _scrub_move(self, pos: QPointF, event) -> None:
+        pen = self._press_pen
+        if not self._scrubbing:
+            if abs(pos.x() - self._press.x()) < self.SCRUB_START:
+                return
+            self._scrubbing = True
+            self._scrub_acc = 0.0
+            self._scrub_frames = 0
+            self._scrub_last_x = (event.globalPosition().x() if pen and event is not None
+                                  else float(QCursor.pos().x()))
+            QApplication.setOverrideCursor(
+                Qt.CursorShape.SizeHorCursor if pen else Qt.CursorShape.BlankCursor)
+            self.scrub_started.emit()
+            return
+        # the real cursor: queued events may predate a warp (as in the fields)
+        x = event.globalPosition().x() if pen and event is not None else float(QCursor.pos().x())
+        self._scrub_acc += x - self._scrub_last_x
+        self._scrub_last_x = x
+        steps = int(self._scrub_acc / self.SCRUB_PX)
+        if steps:
+            self._scrub_acc -= steps * self.SCRUB_PX
+            self._scrub_frames += steps
+            self.scrub_moved.emit(self._scrub_frames)
+        if not pen and abs(QCursor.pos().x() - self._press_global.x()) > self.WARP:
+            QCursor.setPos(self._press_global)
+            self._scrub_last_x = float(self._press_global.x())
+
+    def _scrub_end(self) -> None:
+        if not self._scrubbing:
+            return
+        self._scrubbing = False
+        if not self._press_pen:
+            QCursor.setPos(self._press_global)       # the cursor reappears where it was pressed
+        QApplication.restoreOverrideCursor()
+        self.scrub_finished.emit()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.press_at(event.position())
+            self.press_at(event.position(), event)
         elif event.button() == Qt.MouseButton.MiddleButton and self.has_video:
             self._pan = event.position()                 # T20: pan as on the timeline
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -929,14 +1152,15 @@ class VideoView(QOpenGLWidget):
                 self._apply_zoom()
             self._pan = event.position()
             return
-        self.move_to(event.position())
+        self.move_to(event.position(), event)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.release_at(event.position())
+            self.release_at(event.position(), event)
         elif event.button() == Qt.MouseButton.MiddleButton and self._pan is not None:
             self._pan = None
             self.set_crop_enabled(self.crop_enabled)     # restores the cursor
+            self.hover_at(event.position(), event.modifiers())
 
     def wheelEvent(self, event) -> None:
         """T20: wheel = zoom around the cursor; horizontal wheel = pan."""
