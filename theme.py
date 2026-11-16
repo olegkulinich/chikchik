@@ -25,6 +25,7 @@ HOTKEY_DIM = DIM
 MINIMAP_TRACK = "#383838"   # timeline minimap: whole file
 MINIMAP_VIEW = DIM    # timeline minimap: visible window
 RULER = DIM               # timeline ruler ticks
+FRAME_TICK = "#3D3D3D"    # T71: per-frame ticks when zoomed in (darker, shorter)
 VIDEO_BG = "#000000"
 CROP = "#00F0FF"      # bright cyan — inverse of the red playhead
 PLAYHEAD = "#FF2A2A"
