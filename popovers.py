@@ -212,13 +212,28 @@ class Twice(tuple):
     def __new__(cls, title: str, action_id: str):
         return super().__new__(cls, (title, action_id))
 
+    @staticmethod
+    def text(key: str) -> str:
+        return f"{key} twice"
+
+
+class Hold(Twice):
+    """JKL b3: reference line "Fast Forward — Hold L", follows the action's key like Twice."""
+
+    @staticmethod
+    def text(key: str) -> str:
+        return f"Hold {key}"
+
 
 # T49 (B2): the Hotkeys window in groups. A str = remappable action (config id),
 # a tuple = reference line (title, keys) — gestures and fixed keys, not remappable;
 # a Twice = reference line built from another action's key.
 GROUPS = (
-    ("Playback", ("play", "loop", "frame_next", "frame_prev", "sec_next", "sec_prev",
-                  "sec5_next", "sec5_prev", "go_start", "go_end",
+    ("Playback", ("play", "jkl_stop", "frame_next", "frame_prev", "sec_next", "sec_prev",
+                  "sec5_next", "sec5_prev",
+                  "jkl_forward", Hold("Fast Forward", "jkl_forward"),
+                  "jkl_back", Hold("Fast Reverse", "jkl_back"),
+                  "loop", "go_start", "go_end",
                   "mute", "volume_up", "volume_down")),
     ("Edit", ("trim", "trim_in", "trim_out", Twice("Reset Trim", "trim"),
               "crop", Twice("Reset Crop", "crop"),
@@ -254,7 +269,7 @@ class HotkeysPopover(Popover):
         grid.setVerticalSpacing(self.ROW_SPACING)
         self.caps: dict[str, KeyCap] = {}
         self._refs: list[QLabel] = []
-        self._twice: list[tuple[str, QLabel, QLabel]] = []   # (action id, title, keys)
+        self._twice: list[tuple[str, QLabel, QLabel, type]] = []   # (action id, title, keys, kind)
         self._headers: list[QLabel] = []
         titles = {a.id: a.title for a in HOTKEY_ACTIONS}
         row = 0
@@ -284,7 +299,7 @@ class HotkeysPopover(Popover):
                     grid.addWidget(ref, row, 1, Qt.AlignmentFlag.AlignRight)
                     self._refs.append(ref)
                     if isinstance(item, Twice):              # text set in refresh()
-                        self._twice.append((keys, label, ref))
+                        self._twice.append((keys, label, ref, type(item)))
                 else:
                     grid.addWidget(QLabel(titles[item]), row, 0)
                     cap = KeyCap()
@@ -353,9 +368,9 @@ class HotkeysPopover(Popover):
     def refresh(self) -> None:
         for action_id, cap in self.caps.items():
             cap.set_key(self.config.hotkey(action_id))
-        for action_id, label, ref in self._twice:            # B2-3: follows remapping
+        for action_id, label, ref, kind in self._twice:      # B2-3: follows remapping
             key = self.config.hotkey(action_id)
-            ref.setText(f"{display_key(key)} twice" if key else "")
+            ref.setText(kind.text(display_key(key)) if key else "")
             label.setHidden(not key)
             ref.setHidden(not key)
         self._fit()

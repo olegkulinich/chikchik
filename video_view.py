@@ -818,6 +818,28 @@ class VideoView(QOpenGLWidget):
     def pause(self) -> None:
         self._set_pause(True)
 
+    # --------------------------------------------------------- JKL (T67)
+    def play(self) -> None:
+        """Unpause (no toggle); at the end of the file starts over, like Play."""
+        if not self.has_video:
+            return
+        if self._state.get("eof-reached"):
+            self.seek(0.0)
+            self._state["eof-reached"] = False
+        self._set_pause(False)
+
+    def set_speed(self, speed: float) -> None:
+        self._command("set", "speed", f"{speed:g}")
+
+    def set_backward(self, on: bool) -> None:
+        """mpv's own backward playback: smooth on intra-only files (ProRes, sequences),
+        stalls on long-GOP H.264 — those go backward by exact seeks (main_window)."""
+        self._command("set", "play-direction", "backward" if on else "forward")
+
+    def drop_pending_seek(self) -> None:
+        """The seek in flight lands; a queued one is forgotten (the frame on screen stays)."""
+        self._pending = None
+
     def set_scrub_mode(self, enabled: bool) -> None:
         """Lighter software decoding while the timeline is dragged.
 

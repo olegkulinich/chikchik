@@ -21,7 +21,9 @@ DEFAULTS = {
     "frames_mode": "0",      # T39: show frames instead of timecode
     "pin_on_top": "0",       # T45: window stays above others (remembered)
     "loop": "0",             # T53: ∞ remembered between launches
-    "volume": "100",         # T66: 0–100, remembered (mute is not)
+    "volume": "100",         # T66: 0–100, remembered
+    "muted": "0",            # T67 build 2 (user): remembered too; a "Muted" toast on play
+    "sequence_fps": "25",    # T67 build 2 (user): the last rate set for a sequence
 }
 
 
@@ -37,14 +39,17 @@ HOTKEY_ACTIONS = (
     HotkeyAction("trim_in", "Trim In", "I"),
     HotkeyAction("trim_out", "Trim Out", "O"),
     HotkeyAction("crop", "Crop", "C"),
-    HotkeyAction("frame_next", "Jump Forward 1 frame", "Right"),
-    HotkeyAction("frame_prev", "Jump Backward 1 frame", "Left"),
-    HotkeyAction("sec_next", "Jump Forward 1 sec", "Ctrl+Right"),
-    HotkeyAction("sec_prev", "Jump Backward 1 sec", "Ctrl+Left"),
-    HotkeyAction("sec5_next", "Jump Forward 5 sec", "Shift+Right"),
-    HotkeyAction("sec5_prev", "Jump Backward 5 sec", "Shift+Left"),
+    HotkeyAction("frame_next", "Forward 1 frame", "Right"),
+    HotkeyAction("frame_prev", "Backward 1 frame", "Left"),
+    HotkeyAction("sec_next", "Forward 1 sec", "Ctrl+Right"),
+    HotkeyAction("sec_prev", "Backward 1 sec", "Ctrl+Left"),
+    HotkeyAction("sec5_next", "Forward 5 sec", "Shift+Right"),
+    HotkeyAction("sec5_prev", "Backward 5 sec", "Shift+Left"),
     HotkeyAction("play", "Play/Pause", "Space"),
-    HotkeyAction("loop", "Loop", "Shift+L"),                 # T21; T65 (was L)
+    HotkeyAction("loop", "Loop", "Shift+L"),                 # T21; T65 (was L); Shift = mode (JKL b3 trial Ctrl+Shift+L reverted)
+    HotkeyAction("jkl_forward", "Forward 10 sec", "L"),    # T67
+    HotkeyAction("jkl_stop", "Pause", "K"),                                # T67
+    HotkeyAction("jkl_back", "Backward 10 sec", "J"),      # T67
     HotkeyAction("go_start", "Go to Start", "Home"),         # T41
     HotkeyAction("go_end", "Go to End", "End"),              # T41
     HotkeyAction("undo", "Undo", "Ctrl+Z"),                  # T32
