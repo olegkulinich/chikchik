@@ -25,6 +25,7 @@ from PySide6.QtGui import QCursor, QFont, QFontDatabase, QInputDevice, QPointing
 
 import perf_log
 import theme
+import timecode
 
 
 def button(text: str = "", checkable: bool = False, tooltip: str = "") -> QPushButton:
@@ -726,33 +727,51 @@ class Timeline(QWidget):
         return None
 
     # --- ruler
-    def _label_step(self) -> float:
+    def _frame_label_step(self) -> float:
         px_per_s = (self.width() - 1) / self._span()
-        if self.frames_mode:
-            for frames in self.NICE_FRAME_STEPS:
-                if frames * self.frame_duration * px_per_s >= self.LABEL_SPACING:
-                    return frames * self.frame_duration
-            return self.NICE_FRAME_STEPS[-1] * self.frame_duration
-        for step in self.NICE_STEPS:
-            if step * px_per_s >= self.LABEL_SPACING:
-                return step
-        return self.NICE_STEPS[-1]
+        for frames in self.NICE_FRAME_STEPS:
+            if frames * self.frame_duration * px_per_s >= self.LABEL_SPACING:
+                return frames * self.frame_duration
+        return self.NICE_FRAME_STEPS[-1] * self.frame_duration
 
-    def _label(self, t: float, step: float) -> str:
+    def _tc_steps(self, base: int) -> list[int]:
+        """T102: label steps in timecode frames — parts of a second that divide it
+        evenly (labels stay on whole seconds), then whole seconds."""
+        steps = [c for c in (1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30) if c < base and base % c == 0]
+        return steps + [round(s * base) for s in self.NICE_STEPS if s >= 1]
+
+    def _ruler_ticks(self):
+        """(time, label) of every ruler label in view."""
+        fd = self.frame_duration
         if self.frames_mode:
-            return str(round(t / self.frame_duration) + self.frame_offset)
+            step = self._frame_label_step()
+            step_frames = max(1, round(step / fd))   # ticks on round numbers of the sequence (T47)
+            shift = (self.frame_offset % step_frames) * fd
+            t = math.floor((self.view_start + shift) / step) * step - shift
+            while t <= self.view_end + step:
+                t = round(t / fd) * fd          # exact multiples: no drift over long files
+                yield t, str(round(t / fd) + self.frame_offset)
+                t = round(t + step, 6)
+            return
+        # T102: timecode — ticks on timecode labels (23.976 counts 24 per second;
+        # drop-frame labels follow the clock)
+        base, drop = timecode.base_drop(1 / fd)
+        px_per_s = (self.width() - 1) / self._span()
+        steps = self._tc_steps(base)
+        step = next((n for n in steps if n * fd * px_per_s >= self.LABEL_SPACING), steps[-1])
+        start = timecode.frame_to_nominal(max(0, math.floor(self.view_start / fd)), base, drop)
+        n = start // step * step
         hours = self.duration >= 3600
-        if step < 1:
-            minutes, seconds = divmod(t, 60)
-            text = f"{int(minutes):02d}:{seconds:04.1f}"
-            if hours:
-                h, m = divmod(int(minutes), 60)
-                text = f"{h}:{m:02d}:{seconds:04.1f}"
-            return text
-        total = int(round(t))
-        h, rest = divmod(total, 3600)
-        m, sec = divmod(rest, 60)
-        return f"{h}:{m:02d}:{sec:02d}" if hours else f"{m:02d}:{sec:02d}"
+        while True:
+            t = timecode.nominal_to_frame(n, base, drop) * fd
+            if t > self.view_end + step * fd:
+                break
+            hh, mm, ss, ff = timecode.split(n, base)
+            text = f"{hh}:{mm:02d}:{ss:02d}" if hours else f"{mm + hh * 60:02d}:{ss:02d}"
+            if step % base:
+                text += f"{';' if drop else ':'}{ff:02d}"
+            yield t, text
+            n += step
 
     # --- paint
     def paintEvent(self, event) -> None:
@@ -776,25 +795,15 @@ class Timeline(QWidget):
                         p.fillRect(QRect(tx, h - 3, 1, 3), tick)
                     k += 1
             # ruler: tick at the bottom + label, no minor ticks
-            step = self._label_step()
-            first = math.floor(self.view_start / step) * step
-            if self.frames_mode:                # ticks on round numbers of the sequence (T47)
-                step_frames = max(1, round(step / self.frame_duration))
-                shift = (self.frame_offset % step_frames) * self.frame_duration
-                first = math.floor((self.view_start + shift) / step) * step - shift
             metrics = p.fontMetrics()
             baseline = (h + self.MINIMAP_H + metrics.ascent() - metrics.descent()) / 2
-            t = first
-            while t <= self.view_end + step:
-                if self.frames_mode:            # exact multiples: no drift over long files
-                    t = round(t / self.frame_duration) * self.frame_duration
+            for t, label in self._ruler_ticks():
                 x = self._x(t)
-                if -metrics.horizontalAdvance("00:00:00") <= x <= w:
+                if -metrics.horizontalAdvance("00:00:00:00") <= x <= w:
                     tx = round(x)
                     p.fillRect(QRect(tx, h - 5, 1, 5), QColor(theme.RULER))
                     p.setPen(QColor(theme.DIM))
-                    p.drawText(QPointF(tx + 4, baseline), self._label(t, step))
-                t = round(t + step, 6)
+                    p.drawText(QPointF(tx + 4, baseline), label)
             x = round(self._x(self.position))
             if 0 <= x < w:
                 p.fillRect(QRect(x, 0, 1, h), QColor(theme.PLAYHEAD))

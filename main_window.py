@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,7 @@ import perf_log
 import startup_log
 from version import APP_NAME
 import theme
+import timecode
 import win_frame
 from backend import (
     find_sequence,
@@ -102,16 +104,6 @@ VIDEO_FILTER = ("Video or frame (*.mp4 *.mkv *.mov *.m4v *.avi *.webm *.mts *.ts
                 ";;All files (*)")
 
 
-def format_time(value: float) -> str:
-    value = max(0.0, value)
-    hours = int(value // 3600)
-    minutes = int(value % 3600 // 60)
-    secs = value % 60
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:06.3f}"
-    return f"{minutes:02d}:{secs:06.3f}"
-
-
 def format_scale(value: float) -> str:
     return f"{round(value, 2):g}x"
 
@@ -121,22 +113,6 @@ FORMATS = ("mp4", "gif", "png", "copy")   # T25: same order everywhere; copy = O
 # fewer (was "≤ 60 s visible": too late in a wide window, too early in a narrow one).
 # Intra-only sources (sequences, ProRes…) always seek exactly.
 EXACT_SCRUB_FRAMES_PER_PX = 4.0
-
-
-def parse_time(text: str) -> float | None:
-    text = text.strip().replace(",", ".")
-    if not text:
-        return None
-    try:
-        parts = [float(p) for p in text.split(":")]
-    except ValueError:
-        return None
-    if len(parts) > 3 or any(p < 0 for p in parts):
-        return None
-    value = 0.0
-    for part in parts:
-        value = value * 60 + part
-    return value
 
 
 def _short_track(track) -> str:
@@ -690,8 +666,12 @@ class MainWindow(QMainWindow):
             self.time_field.prefix.ensurePolished()     # the stylesheet font, as painted
             QFontMetrics(self.time_field.prefix.font()).horizontalAdvance("⌛")
             startup_log.mark("UI: transport · ⌛ glyph measured")
+        # T102 (b): ⌛ 2 px left, the value 6 px left — the glyph has its own side
+        # bearings; this lines both up with In below
+        self.time_field.layout().setContentsMargins(6, 0, 8, 0)
+        self.time_field.layout().setSpacing(2)
         self.time_field.setToolTip("Current time")
-        self.time_field.setText("00:00.000")
+        self.time_field.setText("00:00:00:00")   # T102 (a)
         self.time_field.committed.connect(self._time_field_committed)
         self.time_field.nudged.connect(self._nudge_position)
         self.time_field.scrub_started.connect(self.video.pause)
@@ -992,7 +972,7 @@ class MainWindow(QMainWindow):
             getattr(self, name).setToolTip(key_tip(text, self._key_text(action_id), note))
         other = "Timecode" if self._frames_mode() else "Frames"
         # B2-2b: a gesture, not a remappable key → its own grey line below
-        self.time_field.setToolTip(key_tip("Current time", "", f"Ctrl+Click — {other}"))
+        self.time_field.setToolTip(key_tip("Current time", "", f"Ctrl+Click — {other}\nType +10 / -10 to step"))   # T102
 
     def _escape(self) -> None:
         if self._fullscreen:
@@ -1750,8 +1730,9 @@ class MainWindow(QMainWindow):
     def _time_committed(self, field: Field, text: str, is_in: bool) -> None:
         if self.info is None:
             return
+        current = self.trim_in if is_in else self._out_frame()   # T102: "+10" from here
         self._enable_trim()
-        value = self._parse(text)
+        value = self._parse(text, base=current)
         frame = self._step(False)
         # Out is typed as its last frame (AE: In 0, Out 24 = 25 frames); inside, Out is
         # the boundary after that frame
@@ -1869,7 +1850,7 @@ class MainWindow(QMainWindow):
     def _time_field_committed(self, text: str) -> None:
         if self.info is None:
             return
-        value = self._parse(text)
+        value = self._parse(text, base=self._snap(self.timeline.position))   # T102: "+10"
         if value is None or value > self.info.duration:
             self.time_field.set_error(True)
             return
@@ -1911,7 +1892,7 @@ class MainWindow(QMainWindow):
     def _duration_committed(self, text: str) -> None:
         if self.info is None:
             return
-        value = self._parse(text, length=True)
+        value = self._parse(text, length=True, base=self._trim_range()[1])   # T102: "+10"
         if value is None or value <= 0:
             self.d_field.set_error(True)
             return
@@ -1944,31 +1925,74 @@ class MainWindow(QMainWindow):
         sequence = getattr(self.info, "sequence", None) if self.info is not None else None
         return sequence.first if sequence is not None else 0
 
+    def _tc(self) -> tuple[int, int]:
+        """T102: (frames per timecode second, labels dropped per minute) of the file."""
+        fps = self.info.fps if self.info is not None and self.info.fps else 1 / self._step(False)
+        return timecode.base_drop(fps)
+
     def _fmt(self, t: float) -> str:
-        """Timecode, or the frame number (source fps; a sequence's own numbers) in frames mode."""
-        if self._frames_mode() and self.info is not None:
+        """SMPTE timecode from 0 (T102), or the frame number (source fps; a sequence's
+        own numbers) in frames mode."""
+        if self.info is None:
+            return "00:00:00:00"
+        if self._frames_mode():
             return str(self._frame_of(t) + self._frame_offset())
-        return format_time(t)
+        return timecode.format_frame(self._frame_of(t), *self._tc())
 
     def _fmt_length(self, length: float) -> str:
+        frames = max(1, round(length / self._step(False)))     # frames that get exported
         if self._frames_mode() and self.info is not None:
-            return str(max(1, round(length / self._step(False))))   # frames that get exported
-        return format_time(length)
+            return str(frames)
+        return timecode.format_frame(frames, *self._tc())
 
-    def _parse(self, text: str, length: bool = False) -> float | None:
-        """Frames mode: "120" or "120f" → frame 120; with ":" it's a timecode anyway."""
-        cleaned = text.strip().lower().rstrip("f").strip()
-        if self.info is not None and self._frames_mode() and ":" not in cleaned:
+    def _parse(self, text: str, length: bool = False, base: float | None = None) -> float | None:
+        """T102. Timecode: "1:3::16", digits in pairs from the right ("120" = 1 s 20 f).
+        Frames mode: "120" = frame 120 (a sequence's own numbers). Both: "120f" = frame
+        120, a dot = seconds ("1.5") in timecode mode, ":" = timecode in frames mode.
+        "+10" / "-10" (Resolve): relative to `base` (the field's current value)."""
+        if self.info is None:
+            return None
+        text = text.strip().replace("\u2212", "-").replace(",", ".")
+        # T102 fix: "+30" typed after the shown value ("00:08:56:05+30") — the part
+        # before the sign is the start; "+30" alone starts from `base`
+        tail = re.fullmatch(r"(.*[^\s+-])\s*([+-][^+-]*)", text)
+        if tail and base is not None:
+            start = self._parse(tail.group(1), length)
+            if start is None:
+                return None
+            base, text = start, tail.group(2).strip()
+        sign = 0
+        if text and text[0] in "+-":
+            sign = 1 if text[0] == "+" else -1
+            text = text[1:].strip()
+        relative = sign != 0 and base is not None
+        lower = text.lower()
+        fd = self._step(False)
+        frames: float | None = None
+        if lower.endswith("f") or (self._frames_mode() and not re.search(r"[:;]", text)):
             try:
-                frames = float(cleaned.replace(",", "."))
+                frames = float(lower.rstrip("f").strip())
             except ValueError:
                 return None
             if frames < 0:
                 return None
-            if not length:                      # a position, not a length: own numbers (T47)
+            if not (length or relative):    # a position, not a length: own numbers (T47)
                 frames = max(0.0, frames - self._frame_offset())   # below the first → first
-            return frames * self._step(False)
-        return parse_time(text if not text.strip().lower().endswith("f") else cleaned)
+            value = frames * fd
+        elif re.fullmatch(r"\d*\.\d*", text) and text != ".":
+            value = float(text)                                    # seconds
+        else:
+            frame = timecode.parse(text, *self._tc(), offset=relative)
+            if frame is None:
+                return None
+            value = frame * fd
+        if sign and not relative:
+            return None
+        if relative:
+            value = base + sign * value
+            if not length:
+                value = max(0.0, min(self.info.duration - fd, value))
+        return value
 
     # ------------------------------------------------- Home/End (T41)
     def jump_to_playhead(self) -> None:
