@@ -666,10 +666,10 @@ class MainWindow(QMainWindow):
             self.time_field.prefix.ensurePolished()     # the stylesheet font, as painted
             QFontMetrics(self.time_field.prefix.font()).horizontalAdvance("⌛")
             startup_log.mark("UI: transport · ⌛ glyph measured")
-        # T102 (b): ⌛ 2 px left, the value 5 px left — the glyph has its own side
+        # T102 (b): ⌛ 2 px left, the value 6 px left — the glyph has its own side
         # bearings; this lines both up with In below
         self.time_field.layout().setContentsMargins(6, 0, 8, 0)
-        self.time_field.layout().setSpacing(3)
+        self.time_field.layout().setSpacing(2)
         self.time_field.setToolTip("Current time")
         self.time_field.setText("00:00:00:00")   # T102 (a)
         self.time_field.committed.connect(self._time_field_committed)
