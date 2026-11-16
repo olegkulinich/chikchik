@@ -625,7 +625,7 @@ class MainWindow(QMainWindow):
 
             self.video.preload(self._preload_sequence_url if sequence else self._preload,
                                autoplay=self.config.flag("autoplay"), decoder=decoder,
-                               sequence_fps=SEQUENCE_FPS if sequence else None)
+                               sequence_fps=self._sequence_fps() if sequence else None)
         central.video = self.video
         self.video.crop_drawn.connect(self._crop_drawn)
         self.video.menu_requested.connect(self.show_menu)
@@ -1394,10 +1394,12 @@ class MainWindow(QMainWindow):
             if probe is not None:
                 info = probe.result()
                 startup_log.mark("ffprobe result taken (thread)")
+                if info.sequence is not None and abs(info.fps - self._sequence_fps()) > 0.0005:
+                    info = with_fps(info, self._sequence_fps())   # the thread probes at 25
             elif is_image(path):                                   # T36: a frame → sequence
                 sequence = find_sequence(path)
                 startup_log.mark(f"sequence found: {len(sequence.files)} frames")
-                info = probe_sequence(sequence)
+                info = probe_sequence(sequence, self._sequence_fps())
                 startup_log.mark("ffprobe done (sequence)")
             else:
                 startup_log.mark("ffprobe start")
@@ -2153,10 +2155,19 @@ class MainWindow(QMainWindow):
 
     SEQUENCE_FPS_MAX = 1000.0
 
+    def _sequence_fps(self) -> float:
+        """The rate a sequence opens at: the last one set in the field (user, T67 build 2)."""
+        try:
+            value = float(self.config.get("sequence_fps"))
+        except ValueError:
+            return SEQUENCE_FPS
+        return max(1.0, min(self.SEQUENCE_FPS_MAX, value)) if value == value else SEQUENCE_FPS
+
     def _set_sequence_fps(self, value: float) -> None:
         """T36: rate of the frames, no upper limit (but sane). Trim, crop and the frame
         stay where they were — counted in frames."""
         value = max(1.0, min(self.SEQUENCE_FPS_MAX, round(value, 3)))
+        self.config.set("sequence_fps", f"{value:g}")      # remembered without an export
         info = self.info
         if abs(value - info.fps) < 0.0005:
             self._show_fps()
