@@ -983,10 +983,10 @@ class MainWindow(QMainWindow):
     # mpv's own backward playback only by QTC_JKL_BACK=mpv — at the start of a file it
     # stuck the playhead (build 1). Sound only forward up to 2×.
     # Hidden switches: QTC_JKL_BACK=seek|mpv, QTC_JKL_HOLD_MS (250), QTC_JKL_TAP_S (10),
-    # QTC_JKL_RAMP ("2:2000,4:1000,8:500,16" = speed:ms, the last one stays).
+    # QTC_JKL_RAMP ("2:900,4:600,8:300,16" = speed:ms, the last one stays).
     JKL_HOLD = ("jkl_back", "jkl_forward")
     JKL_TICK_MS = 40                      # backward by seeks: a new target 25× a second
-    JKL_RAMP = "2:2000,4:1000,8:500,16"
+    JKL_RAMP = "2:900,4:600,8:300,16"
     _jkl: dict | None = None              # holding: the shuttle runs
     _jkl_tap: dict | None = None          # pressed, not yet a hold
     _jkl_keys: dict = {}

@@ -39,17 +39,17 @@ HOTKEY_ACTIONS = (
     HotkeyAction("trim_in", "Trim In", "I"),
     HotkeyAction("trim_out", "Trim Out", "O"),
     HotkeyAction("crop", "Crop", "C"),
-    HotkeyAction("frame_next", "Jump Forward 1 frame", "Right"),
-    HotkeyAction("frame_prev", "Jump Backward 1 frame", "Left"),
-    HotkeyAction("sec_next", "Jump Forward 1 sec", "Ctrl+Right"),
-    HotkeyAction("sec_prev", "Jump Backward 1 sec", "Ctrl+Left"),
-    HotkeyAction("sec5_next", "Jump Forward 5 sec", "Shift+Right"),
-    HotkeyAction("sec5_prev", "Jump Backward 5 sec", "Shift+Left"),
+    HotkeyAction("frame_next", "Forward 1 frame", "Right"),
+    HotkeyAction("frame_prev", "Backward 1 frame", "Left"),
+    HotkeyAction("sec_next", "Forward 1 sec", "Ctrl+Right"),
+    HotkeyAction("sec_prev", "Backward 1 sec", "Ctrl+Left"),
+    HotkeyAction("sec5_next", "Forward 5 sec", "Shift+Right"),
+    HotkeyAction("sec5_prev", "Backward 5 sec", "Shift+Left"),
     HotkeyAction("play", "Play/Pause", "Space"),
-    HotkeyAction("loop", "Loop", "Shift+L"),                 # T21; T65 (was L)
-    HotkeyAction("jkl_forward", "Forward 10 sec / Hold to Play", "L"),    # T67
+    HotkeyAction("loop", "Loop", "Ctrl+Shift+L"),            # T21; T65 (was L); JKL b3 (was Shift+L, kept free)
+    HotkeyAction("jkl_forward", "Forward 10 sec", "L"),    # T67
     HotkeyAction("jkl_stop", "Pause", "K"),                                # T67
-    HotkeyAction("jkl_back", "Backward 10 sec / Hold to Play", "J"),      # T67
+    HotkeyAction("jkl_back", "Backward 10 sec", "J"),      # T67
     HotkeyAction("go_start", "Go to Start", "Home"),         # T41
     HotkeyAction("go_end", "Go to End", "End"),              # T41
     HotkeyAction("undo", "Undo", "Ctrl+Z"),                  # T32
