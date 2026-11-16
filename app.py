@@ -151,7 +151,13 @@ def main() -> int:
         return 1
 
     # T38: show the window only after its first frame is drawn (no light flash).
-    theme.cloak(window, True)
+    # T110 experiment QTC_OPEN_ANIM: 0 (default) = cloak, appears at once (no system
+    # open animation: it plays while cloaked); 1 = no cloak, the system animation plays
+    # on show (risk: the T38 light flash); 2 = cloak until the first frame, then
+    # hide + uncloak + show so the system animation plays over the drawn window.
+    open_anim = os.environ.get("QTC_OPEN_ANIM", "0")
+    if open_anim != "1":
+        theme.cloak(window, True)
     uncloaked = False
 
     flush = os.environ.get("QTC_UNCLOAK_FLUSH") == "1"     # E3 (T91) experiment, default off
@@ -163,8 +169,12 @@ def main() -> int:
             if flush:      # T91: wait until DWM has composed the swapped frame (≤ 1 vsync)
                 theme.dwm_flush()
                 startup_log.mark("DwmFlush before uncloak")
-            theme.cloak(window, False)
-            startup_log.mark(f"window uncloaked ({source})")
+            if open_anim == "2":
+                theme.replay_open_animation(window)
+                startup_log.mark(f"window uncloaked + open animation ({source})")
+            else:
+                theme.cloak(window, False)      # no-op with QTC_OPEN_ANIM=1
+                startup_log.mark(f"window uncloaked ({source})")
             QTimer.singleShot(150, placeholder.close)   # E3 (B): real window is above it now
             if not paths:
                 startup_log.finish("done: no file")

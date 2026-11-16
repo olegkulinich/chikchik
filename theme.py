@@ -132,6 +132,29 @@ def cloak(widget: QWidget, on: bool) -> None:
         pass
 
 
+def replay_open_animation(widget: QWidget) -> None:
+    """T110 experiment (QTC_OPEN_ANIM=2), Windows: the window was shown cloaked, so the
+    system open animation (fade + grow) played while nobody could see it. Hide it,
+    uncloak, show again: the animation plays now, over the already drawn first frame.
+    SW_SHOW keeps the current size/position (maximized stays maximized) and activates."""
+    if sys.platform != "win32":
+        cloak(widget, False)
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes as wt
+
+        user32 = ctypes.windll.user32
+        user32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wt.BOOL
+        hwnd = wt.HWND(int(widget.winId()))
+        user32.ShowWindow(hwnd, 0)       # SW_HIDE
+        cloak(widget, False)
+        user32.ShowWindow(hwnd, 5)       # SW_SHOW
+    except Exception:
+        cloak(widget, False)
+
+
 def dwm_flush() -> None:
     """E3 (T91): block until DWM's next composition (QTC_UNCLOAK_FLUSH=1)."""
     if sys.platform != "win32":
