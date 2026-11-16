@@ -1318,7 +1318,7 @@ class MainWindow(QMainWindow):
         if self.info is not None and (self.info.audio or self.info.subtitles):
             # T40a: tracks in submenus (films can carry 20 subtitle tracks); the row shows
             # the current choice. Each row only when the file has such tracks (no sound —
-            # no Audio Track, as with Subtitles).
+            # no Audio Track and no Mute, as with Subtitles).
             idle = self.worker is None
             menu.addSeparator()
             if self.info.audio:
@@ -1329,6 +1329,9 @@ class MainWindow(QMainWindow):
                                       track == self.audio, lambda t=track: self.set_audio(t),
                                       idle, root=menu)
                 submenu_row("Audio Track", _short_track(self.audio), audio)
+                # T111: names what a click does (principle 10), key follows remapping
+                self._menu_choice(menu, "Unmute" if self._muted else "Mute", False,
+                                  self.toggle_mute, hint=self._key_text("mute"))
             if self.info.subtitles:
                 subs_menu = self._new_menu()
                 subs: list[SubtitleTrack | None] = [None, *self.info.subtitles]
