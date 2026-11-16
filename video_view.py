@@ -296,7 +296,25 @@ class VideoView(QOpenGLWidget):
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(shown.adjusted(0.5, 0.5, -0.5, -0.5))
+        line = shown.adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.drawRect(line)
+        if self.crop_enabled:
+            self._paint_handles(painter, line)
+
+    HANDLE = 7          # T108: corner squares, odd → centred on the 1 px line (3 px each side)
+
+    def _paint_handles(self, painter: QPainter, line: QRectF) -> None:
+        """T108: white squares with a 1 px crop-colour stroke on the 4 corners. Whole
+        where the widget has room (grey surround, zoom); clipped at its edges."""
+        half = self.HANDLE // 2
+        stroke, fill = QColor(theme.CROP), QColor(theme.CROP_HANDLE)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for corner in (line.topLeft(), line.topRight(), line.bottomLeft(), line.bottomRight()):
+            # the pixel the 1 px line passes through at this corner
+            cx, cy = math.floor(corner.x()), math.floor(corner.y())
+            outer = QRect(cx - half, cy - half, self.HANDLE, self.HANDLE)
+            painter.fillRect(outer, stroke)
+            painter.fillRect(outer.adjusted(1, 1, -1, -1), fill)
 
     # ------------------------------------------------------ geometry
     def display_size(self) -> tuple[int, int]:
