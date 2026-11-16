@@ -678,7 +678,7 @@ class MainWindow(QMainWindow):
         self.timeline.out_dragged.connect(lambda t: self.set_out(t, step=False))
         self.timeline.range_moved.connect(self._range_moved)
         startup_log.mark("UI: transport · Timeline")
-        self.time_field = Field("⌛", 110)   # emoji, like the app icon
+        self.time_field = Field("⌛", 114)   # emoji, like the app icon; T109: as wide as In
         startup_log.mark("UI: transport · ⌛ Field")
         if os.environ.get("QTC_SYMBOL_FONT", "") != "0":
             # E2 build 2 (C): name the emoji font instead of letting Qt search for a
@@ -696,7 +696,10 @@ class MainWindow(QMainWindow):
         self.time_field.scrub_started.connect(self.video.pause)
         self.time_field.ctrl_click = True
         self.time_field.ctrl_clicked.connect(self.toggle_frames_mode)          # T39
+        # T109: ⌛ left, next to ▶ (above In: one column "where I am / what is selected",
+        # like AE / Resolve); ∞ at the right end of the timeline — more an indicator
         transport.addWidget(self.play_button)
+        transport.addWidget(self.time_field)
         self.loop_button = button("∞", checkable=True)              # T21; tooltip: T48
         self.loop_button.setFixedWidth(32)
         if startup_log.ENABLED:
@@ -706,9 +709,8 @@ class MainWindow(QMainWindow):
         self.loop_button.setChecked(self.config.flag("loop"))           # T53: remembered
         self.loop_button.toggled.connect(lambda on: (self.config.set_flag("loop", on),
                                                      self._update_loop()))
-        transport.addWidget(self.loop_button)
         transport.addWidget(self.timeline, 1)
-        transport.addWidget(self.time_field)
+        transport.addWidget(self.loop_button)
         panels_layout.addWidget(self.transport_bar)
         startup_log.mark("UI: transport row")
 
@@ -762,9 +764,9 @@ class MainWindow(QMainWindow):
         self.fps_field.nudged.connect(self._nudge_fps)
         bottom.addWidget(self.fps_field)
 
-        # 12.24: Tab / Shift+Tab walk the fields left to right; ⌛ last
-        self._tab_fields = [self.in_field, self.out_field, self.d_field,
-                            *self.crop_fields.values(), self.fps_field, self.time_field]
+        # 12.24: Tab / Shift+Tab walk the fields in reading order; ⌛ first (T109)
+        self._tab_fields = [self.time_field, self.in_field, self.out_field, self.d_field,
+                            *self.crop_fields.values(), self.fps_field]
         for field in self._tab_fields:
             field.tabbed.connect(lambda back, f=field: self._tab_from(f, back))
 
