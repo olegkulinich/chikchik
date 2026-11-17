@@ -46,8 +46,6 @@ class VideoView(QOpenGLWidget):
     _seek_done = Signal()              # from mpv's event thread → GUI thread
     _display_changed = Signal()        # dwidth/dheight arrived → re-apply zoom
     _pause_changed = Signal(bool)      # E3 (T93): mpv's pause → GUI thread
-    _early_loaded = Signal()           # T96: the early file is open (still without video)
-    _early_video = Signal()            # T96: video chain configured after it was switched on
 
     # Read from a cache filled by mpv's event thread: a synchronous property read
     # waits for the mpv core, which is busy for the whole seek (~200 ms on long
@@ -100,8 +98,6 @@ class VideoView(QOpenGLWidget):
         self._silence_timer.setInterval(int(_silence_minutes() * 60_000))
         self._silence_timer.timeout.connect(self._silence_sleep)
         self._pause_changed.connect(self._on_pause_changed, Qt.ConnectionType.QueuedConnection)
-        self._early_loaded.connect(self._on_early_loaded, Qt.ConnectionType.QueuedConnection)
-        self._early_video.connect(self._release_early_pause, Qt.ConnectionType.QueuedConnection)
         perf_log.resume.log(f"mpv options: {options}")
         startup_log.mark("mpv module imported")
         # E2 build 2 (E): the options of this run, so a bench with QTC_MPV_OPTS is provable
@@ -203,7 +199,6 @@ class VideoView(QOpenGLWidget):
         self._render.update_cb = self._on_render_update
         startup_log.mark("GL: mpv render context ready")
         self._send_preload()                               # E2 (55b')
-        self._enable_early_video()                         # T96
         if startup_log.ENABLED:
             self.frameSwapped.connect(self._startup_swapped)
         if perf_log.resume.enabled:
@@ -513,18 +508,11 @@ class VideoView(QOpenGLWidget):
                          self._mpv.MpvEventID.PLAYBACK_RESTART: "mpv: playback-restart"}
                 if event_id in names:
                     startup_log.mark(names[event_id], once=True)
-                # T96: the early file restarts once without video — not a frame yet; with
-                # video switched on later only video-reconfig comes (no new restart).
-                if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART and self._early != "loading" \
-                        or event_id == self._mpv.MpvEventID.VIDEO_RECONFIG and self._early == "video":
+                if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                     self._startup_restart = True
                     self._frame_ready.emit()
             if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                 self._seek_done.emit()
-            elif event_id == self._mpv.MpvEventID.FILE_LOADED and self._early == "loading":
-                self._early_loaded.emit()
-            elif event_id == self._mpv.MpvEventID.VIDEO_RECONFIG and self._early == "video":
-                self._early_video.emit()
         except Exception:
             pass
 
@@ -538,19 +526,6 @@ class VideoView(QOpenGLWidget):
     # ------------------------------------------------------- control
     _preloaded: str | None = None
 
-    # T96: open the file in mpv before the window exists, paused, into vo=null (vo=libmpv
-    # without a render context drops the video track; vid=no instead ends files that have
-    # no audio either). Once the render context is ready vo goes to libmpv — mpv rebuilds
-    # the video chain on the open file — then the pause the app asked for. Container,
-    # audio device and scripts get ready while Qt builds the window.
-    # Off by default (T96 build 2): bench 2026-11-15 — the real picture came 150–270 ms
-    # later than the E2 way (decoding into vo=null competes with winId, the chain is built
-    # twice). QTC_EARLY_LOAD=1 turns it on for experiments; remove in F cleanup.
-    EARLY = os.environ.get("QTC_EARLY_LOAD", "0") == "1"
-    _early: str | None = None        # None · "loading" (no video yet) · "video" · "done"
-    _early_file_loaded = False
-    _early_pause = True              # the pause to apply once the picture is there
-
     def preload(self, url, autoplay: bool, decoder=None, sequence_fps: float | None = None
                 ) -> None:
         """E2 (55b'): start loading before ffprobe and the UI are done; `load` with the
@@ -561,24 +536,10 @@ class VideoView(QOpenGLWidget):
         self._preload_url = url if callable(url) else (lambda u=str(url): u)
         self._preload_decoder = decoder
         self._preload_waiting = True
-        self._early_pause = not autoplay
         if sequence_fps:
             self._set("mf-fps", f"{sequence_fps:.6f}")
         self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
         self._set("background", "tiles")     # mpv ≥ 0.38
-        if self.EARLY and self._render is None:
-            target = self._preload_url()
-            if target is not None:
-                self._preloaded = target
-                self._preload_waiting = False
-                self._early = "loading"
-                self._early_file_loaded = False
-                self._set("pause", True)
-                self._set("vo", "null")
-                startup_log.mark("mpv: loadfile sent (early, vo=null)", once=True)
-                self._loadfile(target, "")
-                return
-            startup_log.mark("preload: url not ready yet (asked again in initializeGL)")
         self._set("pause", not autoplay)
         if self._render is not None:
             self._send_preload()
@@ -604,42 +565,11 @@ class VideoView(QOpenGLWidget):
             startup_log.mark("mpv: loadfile sent (preload)", once=True)
             self._loadfile(target, decoder)
 
-    def _on_early_loaded(self) -> None:
-        self._early_file_loaded = True
-        self._enable_early_video()
-
-    def _enable_early_video(self) -> None:
-        """T96: render context ready and the early file open → video on, with this file's
-        decoder options (file-local: the next file starts from the defaults again)."""
-        if self._early != "loading" or self._render is None or not self._early_file_loaded:
-            return
-        self._early = "video"
-        for part in self._decoder().split(","):
-            name, _, value = part.partition("=")
-            if name and value:
-                self._command("set", f"file-local-options/{name}", value)
-        self._set("vo", "libmpv")
-        startup_log.mark("mpv: vo=libmpv (early file)")
-        QTimer.singleShot(1000, self._release_early_pause)   # a file without video
-
-    def _release_early_pause(self) -> None:
-        if self._early == "video":
-            self._early = "done"
-            self._set("pause", self._early_pause)
-            startup_log.mark(f"early file: pause {'kept' if self._early_pause else 'released'}")
-
-    def _early_off(self) -> None:
-        """T96: leave the early state; vo=null never outlives it."""
-        if self._early in ("loading",):
-            self._set("vo", "libmpv")
-        self._early = None
-
     def cancel_preload(self) -> None:
         if self._preloaded is not None:
             sent = not self._preload_waiting
             self._preloaded = None
             self._preload_waiting = False
-            self._early_off()
             if sent:
                 self._command("stop")
 
@@ -661,16 +591,9 @@ class VideoView(QOpenGLWidget):
         self._wake_audio()           # T93: a new file starts with the silence back on
         kept = self._preloaded is not None and self._preloaded == str(path) \
             and not self._preload_waiting
-        # T96: the early file holds its pause until the picture is there
-        holding = kept and self._early in ("loading", "video")
-        if holding:
-            self._early_pause = paused
-        else:
-            self._early_off()
         # E2 build 2 (2.2): all async, in order — a synchronous property set waits while
         # the mpv core opens the (preloaded) file and froze the UI for ~200 ms.
-        if not holding:
-            self._set("pause", paused)   # before loadfile: mpv shows frame 1 and waits
+        self._set("pause", paused)       # before loadfile: mpv shows frame 1 and waits
         if sequence_fps:
             self._set("mf-fps", f"{sequence_fps:.6f}")
         # T36: transparency on a checkerboard (export decides the rest)
@@ -687,8 +610,7 @@ class VideoView(QOpenGLWidget):
             self._loadfile(str(path), tracks + (f",{decoder}" if decoder else ""), aid, sid)
         self._preloaded = None
         self._preload_waiting = False
-        if not holding:
-            self._set("pause", paused)
+        self._set("pause", paused)
         self.update()
 
     _KEEP = object()        # preload: tracks stay as they are
