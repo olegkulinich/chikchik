@@ -655,7 +655,7 @@ class MainWindow(QMainWindow):
         self.timeline.out_dragged.connect(lambda t: self.set_out(t, step=False))
         self.timeline.range_moved.connect(self._range_moved)
         startup_log.mark("UI: transport · Timeline")
-        self.time_field = Field("⌛", 114)   # emoji, like the app icon; T109: as wide as In
+        self.time_field = Field("⌛", 111)   # emoji, like the app icon; T109 / T113: as wide as In
         startup_log.mark("UI: transport · ⌛ Field")
         if os.environ.get("QTC_SYMBOL_FONT", "") != "0":
             # E2 build 2 (C): name the emoji font instead of letting Qt search for a
@@ -667,9 +667,9 @@ class MainWindow(QMainWindow):
             QFontMetrics(self.time_field.prefix.font()).horizontalAdvance("⌛")
             startup_log.mark("UI: transport · ⌛ glyph measured")
         # T102 (b): ⌛ 2 px left, the value 6 px left — the glyph has its own side
-        # bearings; this lines both up with In below
-        self.time_field.layout().setContentsMargins(6, 0, 8, 0)
-        self.time_field.layout().setSpacing(2)
+        # bearings; this lines both up with In below. T113: ⌛ 1 px more left, value stays
+        self.time_field.layout().setContentsMargins(5, 0, 8, 0)
+        self.time_field.layout().setSpacing(3)
         self.time_field.setToolTip("Current time")
         self.time_field.setText("00:00:00:00")   # T102 (a)
         self.time_field.committed.connect(self._time_field_committed)
@@ -703,8 +703,10 @@ class MainWindow(QMainWindow):
                                   tooltip="Export only the In–Out range (off: the whole file)")
         self.trim_button.toggled.connect(self._trim_toggled)
         bottom.addWidget(self.trim_button)
-        self.in_field = Field("In", 114)
-        self.out_field = Field("Out", 114)
+        self.in_field = Field("In", 111)     # T113: same 342 px for the three, split by label
+        # width so every value gets the same room (Out's label is the longest; Inter 12 px:
+        # In 10, Out 20, D 9 → values ~79 px each, timecode 00:00:00:00 = 71)
+        self.out_field = Field("Out", 121)
         self.in_field.committed.connect(lambda text: self._time_committed(self.in_field, text, True))
         self.out_field.committed.connect(lambda text: self._time_committed(self.out_field, text, False))
         self.in_field.nudged.connect(lambda n, c: self._nudge_trim(True, n, c))
@@ -712,7 +714,7 @@ class MainWindow(QMainWindow):
         for field in (self.in_field, self.out_field):
             field.scrub_started.connect(self._begin_edge_preview)
             field.scrub_finished.connect(self._end_edge_preview)
-        self.d_field = Field("D", 114)                                         # T39
+        self.d_field = Field("D", 110)                                         # T39
         self.d_field.setToolTip("Duration — what will be exported")
         self.d_field.committed.connect(self._duration_committed)
         self.d_field.nudged.connect(self._nudge_duration)

@@ -59,11 +59,18 @@ python tools\build_info.py
 if errorlevel 1 goto error
 
 rem ---------------------------------------------------------------- program
+rem  F build 4: --noupx (never compress DLLs: slower start), runtime hook = early
+rem  GL warm before PyInstaller loads QtCore (QTC_EARLY_WARM=0 off), excluded modules
+rem  are never imported at run time (their PyInstaller hooks cost ~7 ms at start).
 python -m PyInstaller ^
     --noconfirm ^
     --clean ^
     --windowed ^
     --onedir ^
+    --noupx ^
+    --runtime-hook pyi_rth_chikchik.py ^
+    --exclude-module multiprocessing ^
+    --exclude-module pkgutil ^
     --name ChikChik ^
     --add-data "fonts;fonts" ^
     --add-data "icon.ico;." ^
