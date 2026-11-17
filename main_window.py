@@ -3262,11 +3262,6 @@ class MainWindow(QMainWindow):
             self.config.set_geometry(self._window_geometry)   # T22: fullscreen isn't remembered
         else:
             self.config.set_geometry(self.saveGeometry())
-        if sys.platform == "win32":          # E3 (B): where the placeholder goes next time
-            import placeholder
-
-            value = None if self._fullscreen else placeholder.save_value(self.winId())
-            self.config.set_placeholder(f"{value},{self._ui_mode}" if value else "")
         for popover in (self._settings_popover, self._hotkeys_popover):   # T56: not modal —
             if popover is not None:                                        # they'd keep the app alive
                 popover.close()
