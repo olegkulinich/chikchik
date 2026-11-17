@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import startup_log  # noqa: I001 — first: T55a timestamps start here
 
+startup_log.mark("python: app.py started")   # F build 4: frozen app may start the log earlier
+
 import locale
 import os
 import sys

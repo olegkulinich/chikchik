@@ -11,7 +11,8 @@ Hidden switch QTC_GL_WARM (Windows only):
   2 / unset — 1 + create a dummy GL context, make it current, read GL_RENDERER, delete it
     (default since E2 build 2 bench: native window ~290 → ~195 ms; level 1 ~220)
 
-No Qt imports: app.py starts this before PySide6.
+No Qt imports: app.py starts this before PySide6 — in the frozen app already from
+`pyi_rth_chikchik.py` (F build 4), before PyInstaller's own hooks load QtCore.
 """
 from __future__ import annotations
 
@@ -111,10 +112,16 @@ def _run(level: int) -> None:
         startup_log.mark(f"GL warm: failed · {exc}")
 
 
+_started = False
+
+
 def start() -> None:
+    """Idempotent: F build 4 calls it from the PyInstaller runtime hook, app.py again."""
+    global _started
     if sys.platform != "win32":
         return
-    if LEVEL <= 0:
+    if LEVEL <= 0 or _started:
         return
+    _started = True
     threading.Thread(target=_run, args=(LEVEL,), name="gl-warm", daemon=True).start()
     startup_log.mark(f"GL warm: thread started (level {LEVEL})")
