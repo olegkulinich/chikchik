@@ -244,6 +244,3 @@ class Config(QObject):
     def set_geometry(self, data) -> None:
         self._store.setValue("window/geometry", data)
 
-    def set_placeholder(self, value: str) -> None:
-        """E3 (B): plain-text window placement for placeholder.py (read without Qt)."""
-        self._store.setValue("window/placeholder", value)

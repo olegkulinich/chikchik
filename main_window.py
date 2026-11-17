@@ -983,9 +983,9 @@ class MainWindow(QMainWindow):
     # holding plays forward / backward with the speed ramping 2× (2 s) → 4× (1 s) →
     # 8× (0.5 s) → 16×; release → back to what it was: paused stays paused (on the frame
     # on screen), playing plays on at 1×. K = pause. Backward = exact seeks (latest wins);
-    # mpv's own backward playback only by QTC_JKL_BACK=mpv — at the start of a file it
-    # stuck the playhead (build 1). Sound only forward up to 2×.
-    # Hidden switches: QTC_JKL_BACK=seek|mpv, QTC_JKL_HOLD_MS (250), QTC_JKL_TAP_S (10),
+    # mpv's own backward playback was dropped (F): at the start of a file it stuck the
+    # playhead, and long-GOP files stall. Sound only forward up to 2×.
+    # Hidden switches: QTC_JKL_HOLD_MS (250), QTC_JKL_TAP_S (10),
     # QTC_JKL_RAMP ("2:900,4:600,8:300,16" = speed:ms, the last one stays).
     JKL_HOLD = ("jkl_back", "jkl_forward")
     JKL_TICK_MS = 40                      # backward by seeks: a new target 25× a second
@@ -1038,14 +1038,6 @@ class MainWindow(QMainWindow):
                 return action_id
         return ""
 
-    def _jkl_back_mode(self) -> str:
-        """Seeks by default; mpv's own backward playback only by the hidden switch and
-        never with Loop (its backward wrap to the end of the file stalls)."""
-        mode = os.environ.get("QTC_JKL_BACK", "seek").strip().lower()
-        if mode == "mpv" and not self.loop_button.isChecked():
-            return "mpv"
-        return "seek"
-
     def _jkl_seeking(self) -> bool:
         return self._jkl is not None and self._jkl["mode"] == "seek"
 
@@ -1080,7 +1072,7 @@ class MainWindow(QMainWindow):
         if tap is None or self.info is None or not self.video.has_video:
             return
         backward = tap["action"] == "jkl_back"
-        mode = self._jkl_back_mode() if backward else "forward"
+        mode = "seek" if backward else "forward"
         steps = self._jkl_ramp_steps()
         self._jkl = {"action": tap["action"], "mode": mode, "speed": steps[0][0],
                      "step": 0, "steps": steps, "was_playing": tap["was_playing"]}
@@ -1091,7 +1083,6 @@ class MainWindow(QMainWindow):
             self._jkl_tick_timer().start()
         else:
             self.video.set_speed(steps[0][0])
-            self.video.set_backward(mode == "mpv")
             self.video.play()
         self._jkl_next_step()
         self._jkl_show()
@@ -1155,7 +1146,6 @@ class MainWindow(QMainWindow):
         else:
             if not (resume and state["was_playing"]):
                 self.video.pause()                         # pause first: frame on screen
-            self.video.set_backward(False)
         self.video.set_speed(1.0)
         self.video.set_mute(self._muted)
         if resume and state["was_playing"]:
@@ -3262,11 +3252,6 @@ class MainWindow(QMainWindow):
             self.config.set_geometry(self._window_geometry)   # T22: fullscreen isn't remembered
         else:
             self.config.set_geometry(self.saveGeometry())
-        if sys.platform == "win32":          # E3 (B): where the placeholder goes next time
-            import placeholder
-
-            value = None if self._fullscreen else placeholder.save_value(self.winId())
-            self.config.set_placeholder(f"{value},{self._ui_mode}" if value else "")
         for popover in (self._settings_popover, self._hotkeys_popover):   # T56: not modal —
             if popover is not None:                                        # they'd keep the app alive
                 popover.close()

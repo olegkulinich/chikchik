@@ -7,14 +7,12 @@ import os
 import sys
 from pathlib import Path
 
-import placeholder  # noqa: I001 — E3 (B): first window of the process (sets DPI awareness)
 import gl_warm  # noqa: I001 — E2 (A): before PySide6, so the warm-up overlaps the imports
 
 # E4: desktop OpenGL straight away — skips Qt's GPU blacklist probe (bench: native window
 # −6 ms, window −10…−20 ms). Set QT_OPENGL=angle / software by hand to override.
 os.environ.setdefault("QT_OPENGL", "desktop")
 
-placeholder.start(sys.argv)
 gl_warm.start()
 if startup_log.ENABLED:          # which hidden switches this run had (bench variants)
     _switches = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
@@ -165,7 +163,6 @@ def main() -> int:
                 startup_log.mark("DwmFlush before uncloak")
             theme.cloak(window, False)
             startup_log.mark(f"window uncloaked ({source})")
-            QTimer.singleShot(150, placeholder.close)   # E3 (B): real window is above it now
             if not paths:
                 startup_log.finish("done: no file")
 

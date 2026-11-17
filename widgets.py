@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QPainter, QPainterPath, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
