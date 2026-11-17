@@ -655,7 +655,7 @@ class MainWindow(QMainWindow):
         self.timeline.out_dragged.connect(lambda t: self.set_out(t, step=False))
         self.timeline.range_moved.connect(self._range_moved)
         startup_log.mark("UI: transport · Timeline")
-        self.time_field = Field("⌛", 114)   # emoji, like the app icon; T109: as wide as In
+        self.time_field = Field("⌛", 114)   # emoji, like the app icon; T109: was as wide as In (T113: In 111)
         startup_log.mark("UI: transport · ⌛ Field")
         if os.environ.get("QTC_SYMBOL_FONT", "") != "0":
             # E2 build 2 (C): name the emoji font instead of letting Qt search for a
@@ -703,8 +703,10 @@ class MainWindow(QMainWindow):
                                   tooltip="Export only the In–Out range (off: the whole file)")
         self.trim_button.toggled.connect(self._trim_toggled)
         bottom.addWidget(self.trim_button)
-        self.in_field = Field("In", 114)
-        self.out_field = Field("Out", 114)
+        self.in_field = Field("In", 111)     # T113: same 342 px for the three, split by label
+        # width so every value gets the same room (Out's label is the longest; Inter 12 px:
+        # In 10, Out 20, D 9 → values ~79 px each, timecode 00:00:00:00 = 71)
+        self.out_field = Field("Out", 121)
         self.in_field.committed.connect(lambda text: self._time_committed(self.in_field, text, True))
         self.out_field.committed.connect(lambda text: self._time_committed(self.out_field, text, False))
         self.in_field.nudged.connect(lambda n, c: self._nudge_trim(True, n, c))
@@ -712,7 +714,7 @@ class MainWindow(QMainWindow):
         for field in (self.in_field, self.out_field):
             field.scrub_started.connect(self._begin_edge_preview)
             field.scrub_finished.connect(self._end_edge_preview)
-        self.d_field = Field("D", 114)                                         # T39
+        self.d_field = Field("D", 110)                                         # T39
         self.d_field.setToolTip("Duration — what will be exported")
         self.d_field.committed.connect(self._duration_committed)
         self.d_field.nudged.connect(self._nudge_duration)
