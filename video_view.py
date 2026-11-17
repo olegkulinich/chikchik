@@ -887,11 +887,6 @@ class VideoView(QOpenGLWidget):
     def set_speed(self, speed: float) -> None:
         self._command("set", "speed", f"{speed:g}")
 
-    def set_backward(self, on: bool) -> None:
-        """mpv's own backward playback: smooth on intra-only files (ProRes, sequences),
-        stalls on long-GOP H.264 — those go backward by exact seeks (main_window)."""
-        self._command("set", "play-direction", "backward" if on else "forward")
-
     def drop_pending_seek(self) -> None:
         """The seek in flight lands; a queued one is forgotten (the frame on screen stays)."""
         self._pending = None
