@@ -79,7 +79,8 @@ Root: HKCU; Subkey: "Software\Classes\.webm\OpenWithList\{#OldName}.exe"; ValueT
 Root: HKCU; Subkey: "Software\Classes\.mts\OpenWithList\{#OldName}.exe"; ValueType: none; Flags: deletekey
 Root: HKCU; Subkey: "Software\Classes\.ts\OpenWithList\{#OldName}.exe"; ValueType: none; Flags: deletekey
 
-; "Open with" list
+; "Open with" list (never the default app). T98: images too — a .png/.jpg opens as the whole
+; sequence (T36). Images get no Explorer right-click items (T30 stays video-only).
 Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".mp4"; ValueData: ""
@@ -90,6 +91,9 @@ Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; Va
 Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".webm"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".mts"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".ts"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".png"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".jpg"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".jpeg"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\.mp4\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\.mkv\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\.mov\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
@@ -98,6 +102,9 @@ Root: HKCU; Subkey: "Software\Classes\.avi\OpenWithList\{#AppExe}"; Flags: unins
 Root: HKCU; Subkey: "Software\Classes\.webm\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\.mts\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\.ts\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\.png\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\.jpg\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\.jpeg\OpenWithList\{#AppExe}"; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
