@@ -59,12 +59,14 @@ python tools\build_info.py
 if errorlevel 1 goto error
 
 rem ---------------------------------------------------------------- program
-rem  F build 4: runtime hook = early GL warm before PyInstaller loads QtCore (QTC_EARLY_WARM=0 off).
+rem  F build 4: --noupx (never compress DLLs: slower start), runtime hook = early
+rem  GL warm before PyInstaller loads QtCore (QTC_EARLY_WARM=0 off).
 python -m PyInstaller ^
     --noconfirm ^
     --clean ^
     --windowed ^
     --onedir ^
+    --noupx ^
     --runtime-hook pyi_rth_chikchik.py ^
     --name ChikChik ^
     --add-data "fonts;fonts" ^
