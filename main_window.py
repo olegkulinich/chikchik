@@ -655,7 +655,7 @@ class MainWindow(QMainWindow):
         self.timeline.out_dragged.connect(lambda t: self.set_out(t, step=False))
         self.timeline.range_moved.connect(self._range_moved)
         startup_log.mark("UI: transport · Timeline")
-        self.time_field = Field("⌛", 114)   # emoji, like the app icon; T109: was as wide as In (T113: In 111)
+        self.time_field = Field("⌛", 111)   # emoji, like the app icon; T109 / T113: as wide as In
         startup_log.mark("UI: transport · ⌛ Field")
         if os.environ.get("QTC_SYMBOL_FONT", "") != "0":
             # E2 build 2 (C): name the emoji font instead of letting Qt search for a
@@ -667,9 +667,9 @@ class MainWindow(QMainWindow):
             QFontMetrics(self.time_field.prefix.font()).horizontalAdvance("⌛")
             startup_log.mark("UI: transport · ⌛ glyph measured")
         # T102 (b): ⌛ 2 px left, the value 6 px left — the glyph has its own side
-        # bearings; this lines both up with In below
-        self.time_field.layout().setContentsMargins(6, 0, 8, 0)
-        self.time_field.layout().setSpacing(2)
+        # bearings; this lines both up with In below. T113: ⌛ 1 px more left, value stays
+        self.time_field.layout().setContentsMargins(5, 0, 8, 0)
+        self.time_field.layout().setSpacing(3)
         self.time_field.setToolTip("Current time")
         self.time_field.setText("00:00:00:00")   # T102 (a)
         self.time_field.committed.connect(self._time_field_committed)
