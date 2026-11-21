@@ -3,6 +3,7 @@
 Run by build.bat. Reads .git directly (git isn't on PATH with GitHub Desktop); the git
 command, if found, only adds the "modified" check for uncommitted changes.
 """
+import os
 import shutil
 import sys
 import subprocess
@@ -46,6 +47,8 @@ def build_line() -> str:
         pushed = commit and ref_value(f"refs/remotes/origin/{branch}") == commit
     else:
         branch, commit, pushed = "detached", head, True
+        if os.environ.get("GITHUB_REF_TYPE") == "tag":       # CI tag build: "v1.0.0 · abc1234"
+            branch = os.environ.get("GITHUB_REF_NAME") or branch
     modified = not pushed
     git = git_command()
     if git:

@@ -1,0 +1,17 @@
+# Exact versions for the GitHub Actions build (.github/workflows/build.yml) =
+# the author's local .venv (pip freeze, Python 3.14.3, 2026-11-21).
+# Local build.bat keeps using requirements-build.txt (ranges).
+altgraph==0.17.5
+packaging==26.3
+pefile==2024.8.26
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10
+PySide6==6.12.0
+PySide6_Addons==6.12.0
+PySide6_Essentials==6.12.0
+PySide6_Pdf==6.12.0.140
+PySide6_WebEngine==6.12.0.140
+python-mpv==1.0.8
+pywin32-ctypes==0.2.3
+setuptools==84.2.1
+shiboken6==6.12.0

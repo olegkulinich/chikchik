@@ -1,0 +1,116 @@
+# Windows build: PyInstaller + Inno Setup -> ChikChik-<ver>-Setup.exe
+# Run: Actions tab -> "Build" -> Run workflow (any branch), or push a tag v* (draft Release).
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write          # draft Release on tag builds
+
+env:
+  PYTHON_VERSION: "3.14.3"
+  INNO_SETUP_VERSION: "6.7.1"
+  # Third-party binaries: official upstream releases, pinned by SHA256.
+  MPV_URL: https://github.com/mpv-player/mpv/releases/download/v0.42.0/libmpv-v0.42.0-x86_64-w64-mingw32-lgpl.zip
+  MPV_ZIP_SHA256: 8e5f77430efc53ef175804ba6618527e3af0448a0dcabf04d3cc72659d1a6fce
+  MPV_DLL_SHA256: 94fb87247732c59915cd59808bc582e843a71c22214b7b6c1e5563aa8149cef4
+  FFMPEG_URL: https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip
+  FFMPEG_ZIP_SHA256: 60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba
+  FFMPEG_EXE_SHA256: 3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Tag matches version.py
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $ver = python -c "from version import VERSION; print(VERSION)"
+          if ("v$ver" -ne "${{ github.ref_name }}") {
+            Write-Error "Tag ${{ github.ref_name }} does not match version.py ($ver)"; exit 1
+          }
+
+      - name: Python packages (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-lock.txt
+
+      - name: Cache third-party downloads
+        uses: actions/cache@v4
+        with:
+          path: deps-cache
+          key: deps-${{ env.MPV_ZIP_SHA256 }}-${{ env.FFMPEG_ZIP_SHA256 }}
+
+      - name: libmpv + FFmpeg (download, verify SHA256, unpack)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force deps-cache | Out-Null
+          function Get-Verified($url, $file, $sha) {
+            if (-not (Test-Path $file)) { Invoke-WebRequest -Uri $url -OutFile $file }
+            $got = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $sha) { Remove-Item $file; throw "SHA256 mismatch for ${file}: $got" }
+          }
+          Get-Verified $env:MPV_URL    deps-cache\mpv.zip    $env:MPV_ZIP_SHA256
+          Get-Verified $env:FFMPEG_URL deps-cache\ffmpeg.zip $env:FFMPEG_ZIP_SHA256
+
+          Expand-Archive deps-cache\mpv.zip    -DestinationPath tmp-mpv
+          Expand-Archive deps-cache\ffmpeg.zip -DestinationPath tmp-ff
+          Copy-Item tmp-mpv\libmpv-2.dll, tmp-mpv\LICENSE.LGPL .
+          $ff = (Get-ChildItem tmp-ff -Directory)[0].FullName
+          New-Item -ItemType Directory -Force ffmpeg | Out-Null
+          Copy-Item "$ff\bin\ffmpeg.exe", "$ff\bin\ffprobe.exe", "$ff\LICENSE" ffmpeg\
+          Remove-Item -Recurse tmp-mpv, tmp-ff
+
+          if ((Get-FileHash libmpv-2.dll).Hash.ToLower() -ne $env:MPV_DLL_SHA256) { throw "libmpv-2.dll hash" }
+          if ((Get-FileHash ffmpeg\ffmpeg.exe).Hash.ToLower() -ne $env:FFMPEG_EXE_SHA256) { throw "ffmpeg.exe hash" }
+
+      - name: Inno Setup
+        run: choco install innosetup --version ${{ env.INNO_SETUP_VERSION }} -y --no-progress --allow-downgrade
+
+      - name: build.bat
+        shell: cmd
+        run: call build.bat
+
+      - name: SHA256 of Setup.exe
+        id: setup
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem dist\ChikChik-*-Setup.exe | Select-Object -First 1
+          if (-not $f) { throw "Setup.exe not found" }
+          $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+          "$h  $($f.Name)" | Out-File -Encoding ascii "$($f.FullName).sha256"
+          "name=$($f.Name)" >> $env:GITHUB_OUTPUT
+          "### $($f.Name)`n`nSHA256: ``$h```n`nBuild line: ``$((Get-Content build_info.py | Select-String 'BUILD =').Line)``" >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.setup.outputs.name }}
+          path: |
+            dist/ChikChik-*-Setup.exe
+            dist/ChikChik-*-Setup.exe.sha256
+          retention-days: 30
+
+      - name: Draft Release (tag builds)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" --draft --verify-tag `
+            --title "ChikChik! ${{ github.ref_name }}" --notes "Draft - edit notes before publishing." `
+            (Get-ChildItem dist\ChikChik-*-Setup.exe).FullName `
+            (Get-ChildItem dist\ChikChik-*-Setup.exe.sha256).FullName
