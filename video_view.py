@@ -667,6 +667,10 @@ class VideoView(QOpenGLWidget):
             return None
 
     @property
+    def at_end(self) -> bool:
+        return bool(self._state.get("eof-reached"))
+
+    @property
     def playing(self) -> bool:
         if time.monotonic() < self._stepping_until:
             return False   # frame-step unpauses for one frame — not "playing" for the UI

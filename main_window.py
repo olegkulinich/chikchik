@@ -1144,14 +1144,25 @@ class MainWindow(QMainWindow):
         self._jkl_ramp_timer().stop()
         self._jkl_tick_timer().stop()
         self.toast.hide()
+        play_on = resume and state["was_playing"]
+        resync = None
         if state["mode"] == "seek":
             self.video.drop_pending_seek()
         else:
-            if not (resume and state["was_playing"]):
-                self.video.pause()                         # pause first: frame on screen
+            self.video.pause()                             # pause first: frame on screen
+            if not self.video.at_end:
+                # T118: at high speed a heavy decoder (4K long-GOP) falls behind the
+                # audio clock (mute keeps it running); at 1x mpv then raced the picture
+                # to catch up for 1-2 s. An exact seek to the frame on screen resets
+                # both — a short freeze on that frame instead of the fast tail.
+                resync = self.video.time_pos
         self.video.set_speed(1.0)
         self.video.set_mute(self._muted)
-        if resume and state["was_playing"]:
+        if resync is not None:
+            self._show_at(resync)
+            if play_on:
+                self.video.resume_after_seek()             # one clean start (T115)
+        elif play_on:
             self.video.play()
 
     def _jkl_stop(self) -> None:
