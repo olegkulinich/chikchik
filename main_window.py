@@ -468,6 +468,7 @@ class MainWindow(QMainWindow):
         self._nudge_target = 0.0
         self._nudge_stamp = 0.0
         self._scrub_active = False
+        self._scrub_resume = False          # T115: drag paused playback → resume on release
         self._video_scrub = False           # T100: drag on the video scrubs frames
         self._video_scrub_t0 = 0.0
         self._video_scrub_t: float | None = None
@@ -1555,19 +1556,27 @@ class MainWindow(QMainWindow):
                 self.video.set_scrub_mode(False)
             keyframes, self._kf_drag = self._kf_drag, False
             self._scrub_t = None
+            resume, self._scrub_resume = self._scrub_resume, False
             if keyframes:
                 # T18: the frame found by eye stays — playhead/⌛ follow the picture
                 # (the poll syncs them once the last seek has landed), no exact jump.
                 self._hold_until = 0.0
                 self._follow_picture()
-                return
-            self.video.seek(t, True)
-            self._hold_target, self._hold_until = t, time.monotonic() + 0.5
-            self._nudge_target, self._nudge_stamp = t, time.monotonic()
+            else:
+                self.video.seek(t, True)        # skipped if mpv is already on that frame
+                self._hold_target, self._hold_until = t, time.monotonic() + 0.5
+                self._nudge_target, self._nudge_stamp = t, time.monotonic()
+            if resume:
+                self.video.resume_after_seek()   # T115: one audio start from the final frame
             return
         exact = self._exact_scrub()
         if not self._scrub_active:
             self._scrub_active = True
+            if self.video.playing:
+                # T115 (like Premiere / Resolve): silent picture scrub while dragging,
+                # playback resumes once from the released frame.
+                self._scrub_resume = True
+                self.video.pause()
             if not self.info.intra_only:     # lighter decoding only helps H.264/HEVC
                 self.video.set_scrub_mode(True)
         moved = self._scrub_t is None or abs(t - self._scrub_t) >= self._step(False) / 2
