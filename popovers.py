@@ -1,13 +1,14 @@
 """Settings and Hotkeys popovers."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QKeyEvent
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
 import context_menu
 import theme
+import updates
 import win_frame
 from config import ESC_KEY, HOTKEY_ACTIONS, MENU_SHORTCUTS, Config, display_key
 from version import APP_NAME, BUILD, VERSION
@@ -15,10 +16,12 @@ from widgets import CheckBox, Popover, Segmented, button, dim_label, portable_co
 
 
 class SettingsPopover(Popover):
-    """T25 order: Playback → Quality → Speed → Default Format → Export → version.
-    Width follows the content (widest row + 16 px on both sides)."""
+    """T25 order: Playback → Quality → Speed → Default Format → Export → Explorer Menu →
+    Updates → version + update button (T33). Width follows the content (widest row
+    + 16 px on both sides)."""
 
-    def __init__(self, config: Config, parent=None):
+    def __init__(self, config: Config, checker: updates.UpdateChecker | None = None,
+                 parent=None):
         super().__init__("Settings", parent)
         self.pos_name = "settings"
         self.toggle_keys = (MENU_SHORTCUTS["settings"][1],)          # 9a: Ctrl+K closes too
@@ -60,7 +63,7 @@ class SettingsPopover(Popover):
         self.save_to = self._section("Export", [
             ("same", "Same Folder", "Save next to the source as name.cut.mp4"),
             ("ask", "Ask", "Choose where to save each time"),
-        ], "save_to", last=not context_menu.ENABLED)
+        ], "save_to")
 
         # T30: Explorer right-click items, applied at once (Windows only)
         self.explorer: dict[str, CheckBox] = {}
@@ -72,11 +75,38 @@ class SettingsPopover(Popover):
                 box.toggled.connect(lambda on, i=item: self._explorer_toggled(i, on))
                 self.body.addWidget(box)
                 self.explorer[item] = box
+            self.body.addSpacing(10)
+
+        # T33: Updates (mockups Frame 184, 47, 49–52; checkbox instead of Auto | Manual)
+        self.body.addWidget(QLabel("Updates"))
+        self.update_auto = CheckBox("Check Automatically")
+        self.update_auto.setToolTip("Once a day when ChikChik starts")
+        self.update_auto.toggled.connect(lambda on: config.set_flag("update_auto", on))
+        self.body.addWidget(self.update_auto)
 
         self.body.addSpacing(14)
         version = dim_label(" · ".join(filter(None, (f"{APP_NAME} {VERSION}", BUILD))))
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.body.addWidget(version)
+
+        self.checker = checker
+        self._update_state = "idle"     # idle | checking | latest | available | error
+        self._update_page = ""
+        self.update_button = button()
+        metrics = self.update_button.fontMetrics()
+        self.update_button.setFixedWidth(32 + max(          # fixed: no jump between states
+            metrics.horizontalAdvance(t) for t in ("Check for Updates", "Update to 10.10.10")))
+        self.update_button.clicked.connect(self._update_clicked)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch(1)
+        row.addWidget(self.update_button)
+        row.addStretch(1)
+        self.body.addSpacing(theme.GAP)
+        self.body.addLayout(row)
+        if checker is not None:
+            checker.finished.connect(self._update_checked)
+        self._reset_update_button()
 
         config.changed.connect(self.refresh)
         self.refresh()
@@ -124,9 +154,50 @@ class SettingsPopover(Popover):
         self.default_format.setEnabled(not last)   # the picked one stays highlighted
         for item, box in self.explorer.items():     # the registry is the truth
             box.set_checked(context_menu.is_installed(item))
+        self.update_auto.set_checked(self.config.flag("update_auto"))
+
+    # --- T33 update button
+    def _set_update_button(self, state: str, version: str = "", page: str = "") -> None:
+        self._update_state = state
+        self._update_page = page
+        text = {"idle": "Check for Updates", "checking": "Checking…", "latest": "Up to Date ✓",
+                "available": f"Update to {version}", "error": "Can't Connect"}[state]
+        self.update_button.setText(text)
+        self.update_button.setEnabled(state not in ("checking", "latest"))
+        self.update_button.setToolTip(
+            "Open the release page" if state == "available" else
+            "Try again — check your connection or firewall" if state == "error" else "")
+
+    def _reset_update_button(self) -> None:
+        """Each opening: a known newer version → `Update to …`; a check still running →
+        `Checking…`; otherwise `Check for Updates` (Up to Date / Can't Connect don't stay)."""
+        if self.checker is not None and self.checker.busy:
+            if self._update_state != "checking":
+                self._set_update_button("checking")
+            return
+        known = self.config.update_state(updates.source_url())
+        if updates.is_newer(known["latest"]):
+            self._set_update_button("available", known["latest"],
+                                    known["page"] or updates.RELEASES_URL)
+        else:
+            self._set_update_button("idle")
+
+    def _update_clicked(self) -> None:
+        if self._update_state == "available":
+            QDesktopServices.openUrl(QUrl(self._update_page or updates.RELEASES_URL))
+        elif self.checker is not None:
+            self.checker.check(manual=True)      # busy (auto check running) → wait for it
+            self._set_update_button("checking")
+
+    def _update_checked(self, ok: bool, version: str, page: str, _manual: bool) -> None:
+        if ok and updates.is_newer(version):
+            self._set_update_button("available", version, page)
+        elif self._update_state == "checking":
+            self._set_update_button("latest" if ok else "error")
 
     def popup_over(self, widget) -> None:
         self.refresh()
+        self._reset_update_button()
         super().popup_over(widget)
 
 

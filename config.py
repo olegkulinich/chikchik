@@ -24,6 +24,7 @@ DEFAULTS = {
     "volume": "100",         # T66: 0–100, remembered
     "muted": "0",            # T67 build 2 (user): remembered too; a "Muted" toast on play
     "sequence_fps": "25",    # T67 build 2 (user): the last rate set for a sequence
+    "update_auto": "1",      # T33: check for updates once a day on start (Settings)
 }
 
 
@@ -216,6 +217,22 @@ class Config(QObject):
     def remove_recent(self, path: str) -> None:
         self._store.setValue("window/recent",
                              [p for p in self.recent() if p.lower() != path.lower()])
+
+    # --- T33 update check: internal state, written silently (no `changed`)
+    def update_state(self, source: str) -> dict[str, str]:
+        """Last check time, the latest version found and its page. Kept per source:
+        a test source (QTC_UPDATE_URL) never leaves a fake "newer" version behind."""
+        same = str(self._store.value("updates/source", "")) == source
+        get = lambda key: str(self._store.value(f"updates/{key}", "")) if same else ""  # noqa: E731
+        return {"last_check": get("last_check"), "latest": get("latest"),
+                "page": get("page"), "toasted": get("toasted")}
+
+    def set_update_state(self, source: str, **values: str) -> None:
+        if str(self._store.value("updates/source", "")) != source:
+            self._store.remove("updates")
+            self._store.setValue("updates/source", source)
+        for key, value in values.items():
+            self._store.setValue(f"updates/{key}", value)
 
     # --- window
     def popover_offset(self, name: str) -> tuple[int, int] | None:

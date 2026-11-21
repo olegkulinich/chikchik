@@ -46,6 +46,7 @@ import startup_log
 from version import APP_NAME
 import theme
 import timecode
+import updates
 import win_frame
 from backend import (
     find_sequence,
@@ -86,6 +87,7 @@ from backend import (
 from config import (ESC_KEY, FORMAT_HOTKEYS, MENU_ALIASES, MENU_SHORTCUTS, SCALE_HOTKEYS, Config,
                     display_key)
 from popovers import HotkeysPopover, SettingsPopover
+from updates import UpdateChecker
 from video_view import VideoView
 from widgets import (
     FieldGroup,
@@ -523,6 +525,11 @@ class MainWindow(QMainWindow):
         self._config_changed()
         startup_log.mark("MainWindow: config applied")
 
+        # T33: update check (network only in a thread, AUTO_DELAY_MS after the window shows)
+        self.updates = UpdateChecker(self)
+        self.updates.finished.connect(self._update_checked)
+        self._update_scheduled = False
+
         # T1: a press anywhere outside the field being edited applies it and leaves it.
         QApplication.instance().installEventFilter(self)
 
@@ -569,7 +576,7 @@ class MainWindow(QMainWindow):
     @property
     def settings_popover(self) -> SettingsPopover:
         if self._settings_popover is None:
-            self._settings_popover = SettingsPopover(self.config, self)
+            self._settings_popover = SettingsPopover(self.config, self.updates, self)
         return self._settings_popover
 
     def _popover_open(self) -> bool:
@@ -2857,6 +2864,35 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if self._pinned():
             QTimer.singleShot(0, self._apply_pin)
+        if not self._update_scheduled:
+            self._update_scheduled = True
+            QTimer.singleShot(updates.AUTO_DELAY_MS, self._auto_update_check)
+
+    # ========================================================= updates (T33)
+    def _auto_update_check(self) -> None:
+        """Silent, at most once a day (no limit with the QTC_UPDATE_URL test source)."""
+        if not self.config.flag("update_auto"):
+            return
+        state = self.config.update_state(updates.source_url())
+        try:
+            last = float(state["last_check"] or 0)
+        except ValueError:
+            last = 0.0
+        if updates.is_test_source() or not 0 <= time.time() - last < updates.DAY:
+            self.updates.check(manual=False)
+
+    def _update_checked(self, ok: bool, version: str, page: str, manual: bool) -> None:
+        if not ok:
+            return                      # a failed auto check stays silent; Settings shows it
+        source = updates.source_url()
+        toasted = self.config.update_state(source)["toasted"]
+        self.config.set_update_state(source, last_check=str(int(time.time())),
+                                     latest=version, page=page)
+        if updates.is_newer(version) and toasted != version:
+            self.config.set_update_state(source, toasted=version)
+            if not manual:              # found by the button: the button already says it
+                self.toast.show_message(f"Update {version} available → Settings",
+                                        action=False, ms=8000)
 
     # ========================================================= zoom (T20)
     def zoom_fit(self) -> None:
