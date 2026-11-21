@@ -13,7 +13,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.14.3"
-  INNO_SETUP_VERSION: "6.4.0"
+  INNO_SETUP_VERSION: "6.7.1"
   # Third-party binaries: official upstream releases, pinned by SHA256.
   MPV_URL: https://github.com/mpv-player/mpv/releases/download/v0.42.0/libmpv-v0.42.0-x86_64-w64-mingw32-lgpl.zip
   MPV_ZIP_SHA256: 8e5f77430efc53ef175804ba6618527e3af0448a0dcabf04d3cc72659d1a6fce
@@ -80,7 +80,7 @@ jobs:
           if ((Get-FileHash ffmpeg\ffmpeg.exe).Hash.ToLower() -ne $env:FFMPEG_EXE_SHA256) { throw "ffmpeg.exe hash" }
 
       - name: Inno Setup
-        run: choco install innosetup --version ${{ env.INNO_SETUP_VERSION }} -y --no-progress
+        run: choco install innosetup --version ${{ env.INNO_SETUP_VERSION }} -y --no-progress --allow-downgrade
 
       - name: build.bat
         shell: cmd
