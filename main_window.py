@@ -529,6 +529,8 @@ class MainWindow(QMainWindow):
         self.updates = UpdateChecker(self)
         self.updates.finished.connect(self._update_checked)
         self._update_scheduled = False
+        self._update_button = None
+        self._update_page = ""
 
         # T1: a press anywhere outside the field being edited applies it and leaves it.
         QApplication.instance().installEventFilter(self)
@@ -831,6 +833,8 @@ class MainWindow(QMainWindow):
         kind = event.type()
         if kind == QEvent.Type.Resize and obj is getattr(self, "_central", None):
             self._place_overlay()
+        if kind == QEvent.Type.Resize and obj is self.video and self._update_button is not None:
+            self._place_update_button()
         in_window = isinstance(obj, QWidget) and obj.window() is self
         if (self._jkl is not None or self._jkl_tap is not None) \
                 and kind == QEvent.Type.WindowDeactivate and obj is self:
@@ -1438,6 +1442,8 @@ class MainWindow(QMainWindow):
             path = sequence.first_file if keep is None else path
 
         self.source, self.info = path, info
+        if self._update_button is not None:
+            self._update_button.hide()
         if keep is None:
             self._muted_told = False             # a new file: remind once again
         if sequence is not None:
@@ -2866,6 +2872,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._apply_pin)
         if not self._update_scheduled:
             self._update_scheduled = True
+            QTimer.singleShot(0, self._show_cached_update)
             QTimer.singleShot(updates.AUTO_DELAY_MS, self._auto_update_check)
 
     # ========================================================= updates (T33)
@@ -2879,20 +2886,40 @@ class MainWindow(QMainWindow):
         except ValueError:
             last = 0.0
         if updates.is_test_source() or not 0 <= time.time() - last < updates.DAY:
-            self.updates.check(manual=False)
+            if self.updates.check(manual=False) and not updates.is_test_source():
+                self.config.set_update_state(updates.source_url(), last_check=str(int(time.time())))
 
-    def _update_checked(self, ok: bool, version: str, page: str, manual: bool) -> None:
-        if not ok:
-            return                      # a failed auto check stays silent; Settings shows it
-        source = updates.source_url()
-        toasted = self.config.update_state(source)["toasted"]
-        self.config.set_update_state(source, last_check=str(int(time.time())),
-                                     latest=version, page=page)
-        if updates.is_newer(version) and toasted != version:
-            self.config.set_update_state(source, toasted=version)
-            if not manual:              # found by the button: the button already says it
-                self.toast.show_message(f"Update {version} available → Settings",
-                                        action=False, ms=8000)
+    def _update_checked(self, ok: bool, version: str, page: str, _manual: bool) -> None:
+        if ok:
+            self.config.set_update_state(updates.source_url(), last_check=str(int(time.time())),
+                                         latest=version, page=page)
+            self._show_cached_update()
+
+    def _show_cached_update(self) -> None:
+        if self.info is not None:
+            return
+        known = self.config.update_state(updates.source_url())
+        version = known["latest"]
+        if not updates.is_newer(version):
+            if self._update_button is not None:
+                self._update_button.hide()
+            return
+        if self._update_button is None:
+            self._update_button = button(tooltip="Open the release page")
+            self._update_button.setParent(self.video)
+            self._update_button.clicked.connect(self._open_update_page)
+        self._update_page = known["page"] or updates.RELEASES_URL
+        self._update_button.setText(f"Update to {version}")
+        self._update_button.adjustSize()
+        self._place_update_button()
+        self._update_button.show()
+
+    def _place_update_button(self) -> None:
+        self._update_button.move((self.video.width() - self._update_button.width()) // 2,
+                                 self.video.height() // 2 + 26)
+
+    def _open_update_page(self) -> None:
+        QDesktopServices.openUrl(QUrl(self._update_page))
 
     # ========================================================= zoom (T20)
     def zoom_fit(self) -> None:
