@@ -1,7 +1,7 @@
 """T33: update check — reads GitHub `releases/latest`, nothing else.
 
-No download, no install: a newer version only changes the Settings button
-(`Update to x.y.z` opens the release page) and shows one toast per version.
+A newer version is shown in Settings and on the empty screen. The update
+button opens the release page, without downloading or installing anything.
 The network call runs in a plain thread, imported lazily (no startup cost).
 
 Hidden switch `QTC_UPDATE_URL` (tests only): another JSON source, e.g.
