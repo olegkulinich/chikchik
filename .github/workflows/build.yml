@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
-    branches: [stage-f-ci]   # TEMP: test builds of this PR, removed before merge
 
 permissions:
   contents: write          # draft Release on tag builds
