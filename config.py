@@ -225,7 +225,7 @@ class Config(QObject):
         same = str(self._store.value("updates/source", "")) == source
         get = lambda key: str(self._store.value(f"updates/{key}", "")) if same else ""  # noqa: E731
         return {"last_check": get("last_check"), "latest": get("latest"),
-                "page": get("page"), "toasted": get("toasted")}
+                "page": get("page")}
 
     def set_update_state(self, source: str, **values: str) -> None:
         if str(self._store.value("updates/source", "")) != source:
