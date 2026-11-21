@@ -42,6 +42,9 @@ echo mpv DLL: %MPV_DLL%
 echo FFmpeg:  %FFMPEG_VERSION%
 
 rem ------------------------------------------------------------ python env
+rem  CI (GitHub Actions sets CI=true): Python and pinned packages come from the
+rem  workflow (requirements-lock.txt), no local .venv.
+if defined CI goto pyenv_ready
 if not exist ".venv\Scripts\python.exe" (
     py -3 -m venv .venv
     if errorlevel 1 goto error
@@ -53,6 +56,7 @@ if errorlevel 1 goto error
 python -m pip install -r requirements-build.txt
 if errorlevel 1 goto error
 
+:pyenv_ready
 for /f %%v in ('python -c "from version import VERSION; print(VERSION)"') do set VERSION=%%v
 
 python tools\build_info.py
@@ -104,6 +108,10 @@ if not defined ISCC for /f "delims=" %%p in ('where ISCC.exe 2^>nul') do set "IS
 
 if not defined ISCC (
     echo.
+    if defined CI (
+        echo [ERROR] Inno Setup 6 not found on the CI runner.
+        goto error
+    )
     echo [WARNING] Inno Setup 6 not found - installer skipped.
     echo Install it:  winget install JRSoftware.InnoSetup
     goto done
@@ -118,11 +126,11 @@ echo Installer: %CD%\dist\ChikChik-%VERSION%-Setup.exe
 :done
 echo.
 echo Build complete.
-pause
+if not defined CI pause
 exit /b 0
 
 :error
 echo.
 echo Build failed.
-pause
+if not defined CI pause
 exit /b 1
