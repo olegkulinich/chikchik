@@ -5,7 +5,7 @@ No download, no install: a newer version only changes the Settings button
 The network call runs in a plain thread, imported lazily (no startup cost).
 
 Hidden switch `QTC_UPDATE_URL` (tests only): another JSON source, e.g.
-`file:///G:/Dev/fake_release.json` with {"tag_name": "v1.1.0", "html_url": "https://..."}
+`file:///G:/Dev/fake_release.json` (or a plain path) with {"tag_name": "v1.1.0", "html_url": "https://..."}
 or another public repo's `.../releases/latest`. With it the daily limit is off and
 the result is kept apart from the real one (see `Config.update_state`).
 """
@@ -60,16 +60,32 @@ def clean_version(tag: str) -> str:
     return ".".join(map(str, parse_version(tag)))
 
 
+def local_path(url: str) -> str:
+    """Test source on disk: 'file:///G:/Dev/x.json' or a plain 'G:\\Dev\\x.json' → path.
+    Read directly — urllib's file: handling differs between Python versions."""
+    from urllib.parse import unquote
+
+    if url.lower().startswith("file:"):
+        url = unquote(url[5:]).lstrip("/")
+        if not re.match(r"[A-Za-z]:", url):     # POSIX: file:///tmp/x.json
+            url = "/" + url
+    return url
+
+
 def fetch(url: str) -> tuple[str, str]:
     """→ (version '1.1.0', release page URL). Raises on any problem."""
-    import urllib.request   # lazy: ssl / http.client only when a check really runs
+    if not url.lower().startswith(("https://", "http://")):
+        with open(local_path(url), encoding="utf-8-sig") as file:
+            data = json.loads(file.read(1_000_000))
+    else:
+        import urllib.request   # lazy: ssl / http.client only when a check really runs
 
-    request = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": f"ChikChik/{VERSION}",
-    })
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        data = json.loads(response.read(1_000_000).decode("utf-8"))
+        request = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"ChikChik/{VERSION}",
+        })
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            data = json.loads(response.read(1_000_000).decode("utf-8-sig"))
     version = clean_version(str(data.get("tag_name", "")))
     if not version:
         raise ValueError("no version in the answer")
@@ -87,6 +103,7 @@ class UpdateChecker(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.busy = False
+        self.last_error = ""     # shown in the Can't Connect tooltip with a test source
         self.finished.connect(self._done)   # first slot: busy is off before the others run
 
     def _done(self, *_args) -> None:
@@ -104,7 +121,8 @@ class UpdateChecker(QObject):
     def _run(self, url: str, manual: bool) -> None:
         try:
             version, page = fetch(url)
-            ok = True
-        except Exception:   # noqa: BLE001 — offline, firewall, 404, bad JSON: all "can't"
+            ok, self.last_error = True, ""
+        except Exception as error:   # noqa: BLE001 — offline, firewall, 404, bad JSON: all "can't"
             version, page, ok = "", "", False
+            self.last_error = f"{type(error).__name__}: {error}"[:200]
         self.finished.emit(ok, version, page, manual)   # queued into the GUI thread

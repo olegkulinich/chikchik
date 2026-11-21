@@ -166,7 +166,13 @@ class SettingsPopover(Popover):
         self.update_button.setEnabled(state not in ("checking", "latest"))
         self.update_button.setToolTip(
             "Open the release page" if state == "available" else
-            "Try again — check your connection or firewall" if state == "error" else "")
+            self._error_tip() if state == "error" else "")
+
+    def _error_tip(self) -> str:
+        tip = "Try again — check your connection or firewall"
+        if updates.is_test_source() and self.checker is not None and self.checker.last_error:
+            tip += "\n" + self.checker.last_error          # QTC_UPDATE_URL only
+        return tip
 
     def _reset_update_button(self) -> None:
         """Each opening: a known newer version → `Update to …`; a check still running →
