@@ -131,6 +131,8 @@ class VideoView(QOpenGLWidget):
         self._in_flight: tuple[float, bool] | None = None
         self._sent_at = 0.0
         self._pending: tuple[float, bool] | None = None
+        self._landed: tuple[float, bool] | None = None   # T115: last seek that finished
+        self._resume_after = False         # T115: unpause once the queue is empty
 
         self.has_video = False
         self.frame_size = (0, 0)          # crop space (after rotation)
@@ -584,7 +586,8 @@ class VideoView(QOpenGLWidget):
         self.frame_duration_s = frame_duration
         self.has_video = True
         self.reset_zoom()                # T20: each file opens at fit
-        self._in_flight = self._pending = None
+        self._in_flight = self._pending = self._landed = None
+        self._resume_after = False
         paused = not autoplay        # T35: off → the first frame, paused
         self._state.update({"time-pos": None, "eof-reached": False, "pause": paused})
         self._silence_timer.stop()
@@ -679,11 +682,31 @@ class VideoView(QOpenGLWidget):
         if exact and fd:
             position = round(position / fd) * fd - fd / 4
         target = (max(0.0, position), exact)
+        if self._is_repeat(target):
+            if perf_log.ENABLED:
+                perf_log.log("seek   skip (same target)")
+            return
         # Safety valve: if a restart event got lost, don't wait forever.
         if self._in_flight is not None and time.monotonic() - self._sent_at < 1.5:
             self._pending = target
             return
         self._send_seek(target)
+
+    def _is_repeat(self, target: tuple[float, bool]) -> bool:
+        """T115: a seek to where mpv already goes / already is restarts audio and
+        shows the frame again (playing: 1–2 frames back) — skip it."""
+        if self._in_flight is not None:
+            if time.monotonic() - self._sent_at >= 1.5:
+                return False                    # lost restart event: let the valve resend
+            return target == (self._pending if self._pending is not None else self._in_flight)
+        if target != self._landed or self.playing:
+            return False
+        pos = self.time_pos
+        if pos is None:
+            return False
+        fd = self.frame_duration_s or 0.04
+        shown = target[0] + fd / 4 if target[1] else target[0]
+        return abs(pos - shown) < fd / 2
 
     def seek_busy(self) -> bool:
         """A seek is running or queued — mpv's time-pos is stale until it lands."""
@@ -710,10 +733,28 @@ class VideoView(QOpenGLWidget):
             kind = "exact" if self._in_flight[1] else "kf"
             perf_log.log(f"seek   {kind:5} {(time.monotonic() - self._sent_at) * 1000:7.1f} ms"
                          f"{'  (+pending)' if self._pending else ''}")
+        if self._in_flight is not None:
+            self._landed = self._in_flight
         self._in_flight = None
         if self._pending is not None:
             target, self._pending = self._pending, None
             self._send_seek(target)
+        elif self._resume_after:
+            self._resume_queued()
+
+    def resume_after_seek(self) -> None:
+        """T115: unpause once the seek queue is empty — one clean audio start from the
+        final frame instead of a restart per queued seek."""
+        if self.seek_busy() and time.monotonic() - self._sent_at < 1.5:
+            self._resume_after = True
+            return
+        self._resume_queued()
+
+    def _resume_queued(self) -> None:
+        self._resume_after = False
+        if perf_log.ENABLED:
+            perf_log.log("resume after scrub")
+        self._set_pause(False)
 
     def set_loop(self, enabled: bool, start: float | None = None, end: float | None = None) -> None:
         """T21: loop the trim range (A–B) or, without one, the whole file."""
@@ -751,6 +792,7 @@ class VideoView(QOpenGLWidget):
                 perf_log.resume.log(f"resume: pause=no sent at {self._state.get('time-pos')}")
             else:
                 self._resume_t0 = None
+        self._resume_after = False             # T115: any explicit pause/play wins
         self._state["pause"] = paused          # optimistic: the play button reacts at once
         if not paused:
             self._wake_audio()                 # T93: before pause=no, commands go in order
