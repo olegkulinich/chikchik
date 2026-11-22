@@ -784,14 +784,14 @@ class MainWindow(QMainWindow):
 
         startup_log.mark("UI: central widget set")
         central.toast_anchor = lambda: self.video.geometry()
-        self.toast = Toast(central)
+        self.toast = Toast(central, native_overlay=USE_D3D11)
         self.toast.action_clicked.connect(self._show_in_folder)
         self._toast_path: Path | None = None
 
         # T22/T27: bars shown on hover
         self.title_strip = _TitleStrip(self, central)
         if USE_D3D11:
-            for control in (self.title_strip, self.panels, self.toast):
+            for control in (self.title_strip, self.panels):
                 self.video.watch_control(control)
         self._panels_reveal = _Reveal(self, self.panels, "panel", "bottom", shown=True)
         self._title_reveal = _Reveal(self, self.title_strip, "title", "top", shown=False)

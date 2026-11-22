@@ -162,7 +162,7 @@ def main() -> int:
         nonlocal uncloaked
         if not uncloaked:
             uncloaked = True
-            if flush:      # T91: wait until DWM has composed the swapped frame (≤ 1 vsync)
+            if USE_D3D11 or flush:      # T91: wait until DWM has composed the swapped frame (≤ 1 vsync)
                 theme.dwm_flush()
                 startup_log.mark("DwmFlush before uncloak")
             theme.cloak(window, False)
@@ -176,13 +176,16 @@ def main() -> int:
         uncloak("1 s safety timer")
 
     if USE_D3D11:
-        window.video.surface_ready.connect(lambda: uncloak("Qt surface painted"))
+        # The video widget paints inside Qt's backing-store update. Wait until
+        # that event returns and the complete window has been flushed to DWM.
+        window.video.surface_ready.connect(
+            lambda: uncloak("Qt backing store flushed"), Qt.QueuedConnection)
         if startup_log.ENABLED and paths:
             def finish_native_trace():
                 if uncloaked and window.video._startup_restart:
                     startup_log.finish("D3D11: window shown and mpv ready (screen timed externally)")
 
-            window.video.surface_ready.connect(finish_native_trace)
+            window.video.surface_ready.connect(finish_native_trace, Qt.QueuedConnection)
             window.video._seek_done.connect(finish_native_trace, Qt.QueuedConnection)
     else:
         window.video.frameSwapped.connect(lambda: uncloak())

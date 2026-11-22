@@ -1123,8 +1123,14 @@ class Popover(QFrame):
 class Toast(QFrame):
     action_clicked = Signal()
 
-    def __init__(self, parent: QWidget):
+    def __init__(self, parent: QWidget, *, native_overlay: bool = False):
         super().__init__(parent)
+        if native_overlay:
+            # DWM composites the rounded corners directly over the native video.
+            self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setAttribute(Qt.WA_ShowWithoutActivating)
+            parent.window().installEventFilter(self)
         self.setObjectName("Toast")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 6, 6)
@@ -1154,4 +1160,11 @@ class Toast(QFrame):
         parent = self.parentWidget()
         anchor = getattr(parent, "toast_anchor", None)
         area = anchor() if anchor else parent.rect()
-        self.move(area.center().x() - self.width() // 2, area.bottom() - self.height() - theme.GAP2)
+        position = QPoint(area.center().x() - self.width() // 2,
+                          area.bottom() - self.height() - theme.GAP2)
+        self.move(parent.mapToGlobal(position) if self.isWindow() else position)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Move and self.isVisible():
+            self.reposition()
+        return super().eventFilter(obj, event)
