@@ -1,97 +1,59 @@
 # ChikChik!
 
-Быстрая обрезка (trim) и кадрирование (crop) видео из меню ПКМ в проводнике.
+**Find the moment. Trim it, crop it, export it.**
 
-## Установка (для коллег)
+ChikChik! is a lightweight Windows video viewer with frame-by-frame scrubbing and quick export tools. Open a short .mp4 clip, ProRes 4444XQ render, a PNG sequence, or a feature-length MKV and start working directly in the viewer.
 
-Запустить `ChikChik-<версия>-Setup.exe`. Права администратора не нужны, программа ставится
-в `%LOCALAPPDATA%\Programs\ChikChik`. Установщик добавляет:
-- пункты **ChikChik!** и **ChikChik! → GIF** в меню ПКМ для mp4, mkv, mov, m4v, avi, webm, mts, ts — ставятся при первой установке, включаются и выключаются в Settings → Explorer Menu
-  (в новом меню Windows 11 — в «Показать дополнительные параметры»). Второй пункт открывает
-  программу сразу с форматом `.gif`; оба пункта можно отключить одной галочкой в установщике;
-- программу в «Открыть с помощью» и ярлык в «Пуск».
+- **Pull a reference from a film.** Jump to the scene on the timeline, scrub frame by frame to find the cut, then trim and crop the clip and export it as an MP4, GIF, or PNG sequence.
+- **Turn a render sequence into a preview.** Open any PNG in the sequence, set the frame rate, and export a smaller MP4 to share.
 
-FFmpeg и mpv уже внутри; системный FFmpeg не нужен и не трогается.
-Обновление — новый установщик поверх старого, настройки и хоткеи сохраняются.
-Удаление — «Установленные приложения», вместе с пунктом меню.
+[Download ChikChik! for Windows](https://github.com/olegkulinich/chikchik/releases/latest)
 
-Установщик не подписан: SmartScreen покажет «Windows protected your PC» →
-«Подробнее» → «Выполнить в любом случае».
+https://github.com/user-attachments/assets/59ae083b-e37c-4e13-9830-47ca2c9894f6
 
-## Сборка
+## Find the frame you’re looking for
 
-Один раз:
-1. Python 3 (64-bit) и Inno Setup 6: `winget install JRSoftware.InnoSetup`.
-2. В папку проекта: `libmpv-2.dll` и `LICENSE.LGPL` из релизного
-   `libmpv-v<версия>-x86_64-w64-mingw32-lgpl.zip` (github.com/mpv-player/mpv/releases).
-3. В подпапку `ffmpeg\`: `ffmpeg.exe`, `ffprobe.exe` (из `bin\`) и `LICENSE` из
-   gyan.dev **release essentials**.
+Open a feature-length MKV and jump to the scene on the timeline. Scroll over the timeline to zoom into that part of the film, then drag on the picture to scrub frame by frame.
 
-Дальше `build.bat`: проверяет файлы и наличие zscale в FFmpeg, собирает
-`dist\ChikChik\` и установщик `dist\ChikChik-<версия>-Setup.exe`.
-Версия программы — в `version.py`; версии FFmpeg и mpv — в `THIRD-PARTY.txt`.
+## Trim, crop, and export
 
-Программа ищет FFmpeg сначала в своей папке `ffmpeg\`, потом в PATH.
+Use **I** and **O** to mark the range. Scroll over the picture to zoom in and press **C** to crop. Choose the export format, scale and frame rate, then hit Export. Use **Ctrl+C** when you just need the current frame.
 
-Без сборки: `pip install -r requirements.txt`, затем `python app.py video.mp4`.
-Пункт меню для запуска из исходников: `python context_menu.py install` / `uninstall`.
+## Keep a video reference in view 
 
-## Переименование (4.2.0)
+Use **Pin on Top** and **Hide UI** to keep a clip above other windows. Enable **Loop** to keep it playing. Drag with the right mouse button to move the window.
 
-Программа раньше называлась QuickTrimCrop. Установщик ChikChik! обновляет её поверх
-(тот же AppId): ставит в `%LOCALAPPDATA%\Programs\ChikChik`, удаляет старую папку,
-старый ярлык в Пуске и пункт «Открыть с помощью». Настройки и хоткеи сохраняются.
-Удалять старую версию вручную не нужно — только закрыть её перед установкой.
+https://github.com/user-attachments/assets/1e89c8df-1919-44f1-b2af-e53c1379f514
 
-## Управление
+*Both demos use footage from The General (1926), directed by Buster Keaton and Clyde Bruckman. The [Wikimedia Commons copy](https://commons.wikimedia.org/wiki/File%3AThe_General_%281926%29.webm) runs 1 h 15 min 52 s.*
 
-- **Trim** — кнопка или T. I / O ставят точки и сами включают Trim. Выключенный Trim — экспортируется
-  весь файл, In/Out запоминаются. Shift+Esc — сброс Trim.
-- **Crop** — протянуть мышью по видео (порог ~5 px, клик рамку не создаёт); протяжка сама включает Crop.
-  Начать можно и в чёрных полях, и в полосе окна вокруг видео — старт прижимается к краю/углу кадра.
-  Кнопка Crop или C — вкл/выкл (рамка запоминается), Esc — сброс.
-- Клик по видео ничего не запускает; play/pause — Space или кнопка ▶.
-- ПКМ — меню: Hotkeys, Settings, Open, Copy Frame, Export, Export to…, View, Audio Track, Subtitles, Quit.
-- Subtitles (если в файле есть дорожки): None / дорожки. По умолчанию None. Влияет на превью;
-  в Copy в MKV уходит только выбранная дорожка (+ шрифты-вложения), None — без субтитров.
-- Таймлайн: клик — точная перемотка; протяжка — playhead идёт за мышью, видео догоняет
-  (одна перемотка в работе, следующая — к последнему положению мыши; в зуме, когда видно
-  меньше минуты, — точная, кадр за кадром, на общем виде — по ключевым кадрам).
-  Колесо — зум вокруг курсора (до ~10 px на кадр), средняя кнопка или горизонтальная
-  прокрутка — сдвиг. Полоска сверху — весь файл: видимая часть и playhead.
-  Края бирюзовой зоны тянутся мышью (когда Trim включён). Пока тянешь край (на таймлайне
-  или скрабом полей In/Out), видео показывает край, после отпускания playhead возвращается
-  на место. Ввод, стрелки и колесо в полях ставят playhead на край и оставляют там.
-- Поля времени (⌛ — текущее, In, Out) принимают `mm:ss.mmm`, `h:mm:ss.mmm` или секунды.
-  Клик — ввод; Enter или клик мимо поля — применить, Esc — отменить; фокус возвращается к видео.
-- Все поля: ↑/↓ в поле, колесо над полем или протяжка ЛКМ/средней кнопкой за подпись (бесконечная,
-  курсор скрыт). Шаг: 1 кадр / 1 px / 1 fps, с Shift — 1 сек / 10 px / 5 fps.
-- Хоткеи по умолчанию: Space, ←/→ кадр, Ctrl+←/→ 1 сек, Shift+←/→ 5 сек, T/I/O — trim, C — crop,
-  1/2/3/4 — масштаб 1x / 0.5x / 0.33x / 0.25x. Меняются в Hotkeys (Ctrl+/).
+## Time input
 
-## Экспорт
+Timecode starts at the beginning of the clip. **Ctrl+click** the hourglass to switch between timecode and frame numbers.
 
-Нижняя строка: `[формат] [fps] [масштаб] [Export]`.
-- **.mp4** (по умолчанию) — H.264 + AAC, точно по кадру. Кадр Out включается. HDR (PQ/HLG)
-  тонмаппится в SDR bt709. Quality и Speed — в Settings.
-- **.gif** — два прохода (palettegen → paletteuse). Палитра временно пишется рядом с результатом
-  (`имя.palette-tmp.png`) и удаляется всегда. Звук отбрасывается, Quality/Speed не влияют.
-- **Copy (.ext)** — без перекодирования, контейнер исходника; начало прилипает к ключевому кадру.
-  Недоступен при crop, масштабе ≠ 1x или изменённом fps; если включить их при выбранном Copy,
-  формат сам переключится на .mp4 (с сообщением).
-- **fps** — по умолчанию частота исходника, выше не поднимается; равная исходной — без фильтра.
-- **Масштаб**: 1x / 0.75x / 0.5x / 0.33x / 0.25x, после crop, размеры чётные; в меню видно итоговое
-  разрешение и хоткей.
-- **Same Folder** сохраняет `name.cut.mp4` (`name.cut-2.mp4`, если файл уже есть).
-- Исходник программа никогда не перезаписывает: экспорт поверх него не даётся.
+| Input         | Meaning                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| `00:01:12:14` | 1 minute, 12 seconds, and 14 frames                                                              |
+| `1:30`        | 1 second and 30 frames, which becomes `00:00:02:05` at 25 fps                                    |
+| `1.5`         | 1.5 seconds                                                                                      |
+| `120f`        | Frame 120                                                                                        |
+| `+N` / `-N`   | Move N frames forward or back. You can also append the offset to the value already in the field. |
 
-## Диагностика лагов таймлайна
+Right-click anywhere in the viewer to find commands and open **Hotkeys**.
 
-Запустить с переменной `QTC_SCRUB_LOG=1` (в cmd: `set QTC_SCRUB_LOG=1` и затем
-`"%LOCALAPPDATA%\Programs\ChikChik\ChikChik.exe"`), потаскать playhead.
-Лог — `%TEMP%\ChikChik-scrub.log`: `gap` — интервал между движениями мыши,
-`handler` — обработка движения, `render` — отрисовка кадра mpv, `seek` — сколько mpv
-перематывал (`kf` — быстрая к ключевому кадру, `exact` — точная; `+pending` — пока шла
-перемотка, мышь ушла дальше), `poll` — опрос состояния, если дольше 2 мс.
+## Install
 
-Шрифт Inter — SIL Open Font License (см. fonts/LICENSE-Inter.txt).
+1. Download `ChikChik-1.0.0-Setup.exe` from the [latest release](https://github.com/olegkulinich/chikchik/releases/latest).
+2. Run the installer. Windows SmartScreen may show a warning because the installer is unsigned. The release includes a `.sha256` file you can use to verify the download.
+
+ChikChik checks GitHub for updates once a day by default. You can turn off automatic checks or check manually in **Settings → Updates**.
+
+## Build from source
+
+On Windows, install 64-bit Python 3.14 and Inno Setup 6. Place `libmpv-2.dll` and `LICENSE.LGPL` from the linked libmpv LGPL build in the repository root. Copy `ffmpeg.exe`, `ffprobe.exe`, and `LICENSE` from the linked FFmpeg essentials build into `ffmpeg/`. See [THIRD-PARTY.txt](THIRD-PARTY.txt) for both downloads.
+
+Run `build.bat` to create the installer in `dist/`. The [GitHub Actions workflow](.github/workflows/build.yml) pins the versions and shows how the release build is assembled.
+
+## License
+
+ChikChik is licensed under the [GNU General Public License v3.0](LICENSE). See [THIRD-PARTY.txt](THIRD-PARTY.txt) for bundled components and their licenses.
