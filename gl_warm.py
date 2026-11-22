@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+from video_backend import USE_D3D11
 
 import startup_log
 
@@ -120,7 +121,7 @@ def start() -> None:
     global _started
     if sys.platform != "win32":
         return
-    if LEVEL <= 0 or _started:
+    if USE_D3D11 or LEVEL <= 0 or _started:
         return
     _started = True
     threading.Thread(target=_run, args=(LEVEL,), name="gl-warm", daemon=True).start()

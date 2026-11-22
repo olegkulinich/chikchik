@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import gl_warm  # noqa: I001 — E2 (A): before PySide6, so the warm-up overlaps the imports
+from video_backend import USE_D3D11
 
 # E4: desktop OpenGL straight away — skips Qt's GPU blacklist probe (bench: native window
 # −6 ms, window −10…−20 ms). Set QT_OPENGL=angle / software by hand to override.
@@ -96,10 +97,11 @@ def main() -> int:
 
     if startup_log.TRACE:
         install_qt_trace()
-    fmt = QSurfaceFormat.defaultFormat()
-    fmt.setSwapInterval(1)
-    QSurfaceFormat.setDefaultFormat(fmt)
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    if not USE_D3D11:
+        fmt = QSurfaceFormat.defaultFormat()
+        fmt.setSwapInterval(1)
+        QSurfaceFormat.setDefaultFormat(fmt)
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
     app = QApplication(sys.argv)
     app.setApplicationName("ChikChik")
@@ -173,7 +175,17 @@ def main() -> int:
             startup_log.mark("uncloak by 1 s safety timer (no frame yet)")
         uncloak("1 s safety timer")
 
-    window.video.frameSwapped.connect(lambda: uncloak())
+    if USE_D3D11:
+        window.video.surface_ready.connect(lambda: uncloak("Qt surface painted"))
+        if startup_log.ENABLED and paths:
+            def finish_native_trace():
+                if uncloaked and window.video._startup_restart:
+                    startup_log.finish("D3D11: window shown and mpv ready (screen timed externally)")
+
+            window.video.surface_ready.connect(finish_native_trace)
+            window.video._seek_done.connect(finish_native_trace, Qt.QueuedConnection)
+    else:
+        window.video.frameSwapped.connect(lambda: uncloak())
     QTimer.singleShot(1000, uncloak_timer)    # safety net if no frame arrives
     window.show()
     startup_log.mark("window.show()")
@@ -186,7 +198,14 @@ def main() -> int:
     if startup_log.ENABLED:
         QTimer.singleShot(0, lambda: startup_log.mark("event loop running"))
         QTimer.singleShot(15000, lambda: startup_log.finish("gave up: 15 s without a video frame"))
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        if USE_D3D11:
+            import shiboken6
+            player = window.video.player
+            shiboken6.delete(app)
+            player.terminate()
 
 
 if __name__ == "__main__":
