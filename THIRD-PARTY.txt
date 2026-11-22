@@ -4,22 +4,24 @@ Update the versions here when you replace ffmpeg\ or the mpv DLL.
 FFmpeg 9.0.2 (gyan.dev "release essentials" build) - GNU GPL v3
   Files:   ffmpeg\ffmpeg.exe, ffmpeg\ffprobe.exe (run as separate programs)
   License: licenses\FFmpeg-LICENSE.txt
-  Source:  https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
-  Build:   https://www.gyan.dev/ffmpeg/builds/
+  Source:  https://github.com/FFmpeg/FFmpeg/tree/946fcce07b
+  Build:   https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2
 
 libmpv 0.42.0 (official x86_64 LGPL build) - GNU LGPL v2.1 or later
   Files:   mpv-2.dll
   License: licenses\mpv-LICENSE.LGPL
   Source:  https://github.com/mpv-player/mpv/releases/tag/v0.42.0
 
-Qt 6 / PySide6 - GNU LGPL v3
-  Source:  https://code.qt.io/  https://pypi.org/project/PySide6/
+Qt 6.12 / PySide6 6.12.0 - GNU LGPL v3
+  License: licenses\Qt-LGPL-3.0.txt (see also licenses\ChikChik-GPL-3.0.txt)
+  Qt:      https://code.qt.io/cgit/qt/qt5.git/tag/?h=v6.12.0
+  PySide6: https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.12.0-src/
 
-python-mpv - GNU GPL v2 or later / LGPL v2.1 or later
-  Source:  https://github.com/jaseg/python-mpv
+python-mpv 1.0.8 - GNU GPL v2 or later / LGPL v2.1 or later
+  Source:  https://github.com/jaseg/python-mpv/tree/v1.0.8
 
-Python - Python Software Foundation License
-  Source:  https://www.python.org/
+Python 3.14.3 - Python Software Foundation License
+  Source:  https://www.python.org/downloads/release/python-3143/
 
 Inter typeface - SIL Open Font License 1.1
   License: licenses\LICENSE-Inter.txt
