@@ -9,7 +9,7 @@ ChikChik! is a lightweight Windows video viewer with frame-by-frame scrubbing an
 
 [Download ChikChik! for Windows](https://github.com/olegkulinich/chikchik/releases/latest)
 
-https://github.com/user-attachments/assets/1e89c8df-1919-44f1-b2af-e53c1379f514
+https://github.com/user-attachments/assets/59ae083b-e37c-4e13-9830-47ca2c9894f6
 
 ## Find the frame you’re looking for
 
@@ -23,7 +23,7 @@ Use **I** and **O** to mark the range. Scroll over the picture to zoom in and pr
 
 Use **Pin on Top** and **Hide UI** to keep a clip above other windows. Enable **Loop** to keep it playing. Drag with the right mouse button to move the window.
 
-https://github.com/user-attachments/assets/59ae083b-e37c-4e13-9830-47ca2c9894f6
+https://github.com/user-attachments/assets/1e89c8df-1919-44f1-b2af-e53c1379f514
 
 *Both demos use footage from The General (1926), directed by Buster Keaton and Clyde Bruckman. The [Wikimedia Commons copy](https://commons.wikimedia.org/wiki/File%3AThe_General_%281926%29.webm) runs 1 h 15 min 52 s.*
 
