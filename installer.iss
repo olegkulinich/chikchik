@@ -54,6 +54,8 @@ Type: files; Name: "{autoprograms}\{#OldName}.lnk"
 [Files]
 Source: "dist\{#AppTech}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "THIRD-PARTY.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "LICENSE"; DestDir: "{app}\licenses"; DestName: "ChikChik-GPL-3.0.txt"; Flags: ignoreversion
+Source: "LICENSE.LGPL-3.0"; DestDir: "{app}\licenses"; DestName: "Qt-LGPL-3.0.txt"; Flags: ignoreversion
 Source: "LICENSE.LGPL"; DestDir: "{app}\licenses"; DestName: "mpv-LICENSE.LGPL"; Flags: ignoreversion
 Source: "ffmpeg\LICENSE"; DestDir: "{app}\licenses"; DestName: "FFmpeg-LICENSE.txt"; Flags: ignoreversion
 Source: "fonts\LICENSE-Inter.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
