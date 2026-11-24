@@ -1093,7 +1093,12 @@ def decoder_options(info: MediaInfo | None, env=os.environ, cpus: int | None = N
     hwdec = hwdec_for(info, env, cpus)
     if hwdec:
         parts.append(f"hwdec={hwdec}")
-    if info is not None and info.intra_only:
+    # The four-thread startup preset could not sustain 24 fps on 4K ProRes XQ.
+    # Leave thread selection to mpv for these clips, as for other large sources.
+    large_prores_xq = (info is not None and info.codec == "prores"
+                       and info.profile.lower() == "xq"
+                       and max(info.width, info.height) >= 3840)
+    if info is not None and info.intra_only and not large_prores_xq:
         parts.append(intra_threads_option(env, cpus))
     return ",".join(p for p in parts if p)
 

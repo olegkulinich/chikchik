@@ -178,8 +178,17 @@ def main() -> int:
     if USE_D3D11:
         # The video widget paints inside Qt's backing-store update. Wait until
         # that event returns and the complete window has been flushed to DWM.
-        window.video.surface_ready.connect(
-            lambda: uncloak("Qt backing store flushed"), Qt.QueuedConnection)
+        def show_initial_surface():
+            video = window.video
+            if not video._ready:
+                return
+            if paths and video.has_video and not video._first_frame_ready:
+                return
+            uncloak("Qt backing store flushed")
+
+        window.video.surface_ready.connect(show_initial_surface, Qt.QueuedConnection)
+        if paths:
+            window.video._seek_done.connect(show_initial_surface, Qt.QueuedConnection)
         if startup_log.ENABLED and paths:
             def finish_native_trace():
                 if uncloaked and window.video._startup_restart:
@@ -207,6 +216,7 @@ def main() -> int:
         if USE_D3D11:
             import shiboken6
             player = window.video.player
+            window.video.close_composition()
             shiboken6.delete(app)
             player.terminate()
 

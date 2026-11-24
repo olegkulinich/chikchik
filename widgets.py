@@ -1125,6 +1125,7 @@ class Toast(QFrame):
 
     def __init__(self, parent: QWidget, *, native_overlay: bool = False):
         super().__init__(parent)
+        self._native_overlay = native_overlay
         if native_overlay:
             # DWM composites the rounded corners directly over the native video.
             self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
@@ -1145,6 +1146,17 @@ class Toast(QFrame):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
         self.hide()
+
+    def paintEvent(self, event):
+        if not self._native_overlay:
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QColor(theme.STROKE))
+        painter.setBrush(QColor(theme.BUTTON))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                                theme.RADIUS, theme.RADIUS)
 
     def show_message(self, text: str, action: bool, error: bool = False, ms: int = 6000) -> None:
         self.label.setText(text)

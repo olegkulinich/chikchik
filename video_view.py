@@ -88,6 +88,16 @@ class VideoView(VideoSurface):
         )
         if USE_D3D11:
             options.update(self.output_options)
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if local_app_data:
+                # Embedded mpv needs an explicit directory to reuse compiled shaders.
+                cache_dir = Path(local_app_data) / "ChikChik" / "shader-cache"
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass  # Playback can proceed if the cache directory is unavailable.
+                else:
+                    options["gpu_shader_cache_dir"] = str(cache_dir)
         if os.environ.get("QTC_SAFE_GL"):     # software GL in tests
             options.update(gpu_dumb_mode="yes", hwdec="no")
         # E2 (55g): extra mpv options for experiments without a new build, e.g.
@@ -520,6 +530,10 @@ class VideoView(VideoSurface):
                 if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                     self._startup_restart = True
                     self._frame_ready.emit()
+            if USE_D3D11 and self.composition is not None and event_id in (
+                self._mpv.MpvEventID.START_FILE, self._mpv.MpvEventID.VIDEO_RECONFIG
+            ):
+                self._composition_needs_attach = True
             if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                 self._seek_done.emit()
         except Exception:
