@@ -511,12 +511,13 @@ class MainWindow(QMainWindow):
         self._overlay = False
         self._ui_mode = self.config.ui_mode()      # T27: normal | minimal | hidden
         self._frame_hidden = False
-        self._press_origin = ""             # "video" | "panel" while a button is held
+        self._press_origin = ""             # "video" | "panel" | "title" while held
         self._cursor_hidden = False
         self._cursor_pos = QPoint()
         self._cursor_still_since = time.monotonic()
-        self._rmb_press: QPoint | None = None
-        self._rmb_dragging = False
+        self._window_drag_button: Qt.MouseButton | None = None
+        self._window_drag_press = QPoint()
+        self._window_dragging = False
         self._drag_offset = QPoint()
 
         self._build_ui()
@@ -911,8 +912,12 @@ class MainWindow(QMainWindow):
                 self.export(ask=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
             event.accept()
             return True
+        if kind == QEvent.Type.UngrabMouse and obj is self \
+                and self._window_drag_button == Qt.MouseButton.LeftButton:
+            self._finish_window_drag()
         if in_window and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
-                                  QEvent.Type.MouseButtonRelease) and self._rmb_event(obj, event):
+                                  QEvent.Type.MouseButtonRelease) \
+                and self._window_drag_event(obj, event):
             return True
         if in_window and kind == QEvent.Type.ContextMenu \
                 and event.reason() == event.Reason.Mouse:
@@ -2550,8 +2555,8 @@ class MainWindow(QMainWindow):
             self.showNormal()
         self._apply_layout()
 
-    # ------------------------------------------------ right-button drag (PureRef)
-    RMB_DRAG = 5             # px before a right press moves the window instead of the menu
+    # ------------------------------------------------ window drag (PureRef / fullscreen title)
+    WINDOW_DRAG_THRESHOLD = 5  # px of movement before a press starts moving the window
 
     @staticmethod
     def _is_export_key(event) -> bool:
@@ -2561,34 +2566,60 @@ class MainWindow(QMainWindow):
             return False
         return event.key() == Qt.Key.Key_E or (win_frame.ENABLED and event.nativeVirtualKey() == 0x45)
 
-    def _rmb_event(self, obj, event) -> bool:
-        """Right button anywhere in the window: click → menu, drag → move the window.
-        Dragging out of fullscreen (or a maximized window) restores it under the cursor."""
+    def _window_drag_event(self, obj: QWidget, event) -> bool:
+        """Drag with RMB anywhere or LMB on the fullscreen title outside its buttons."""
         kind = event.type()
-        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
-            self._rmb_press = event.globalPosition().toPoint()
-            self._rmb_dragging = False
-            return True
-        if self._rmb_press is None:
-            return False
-        if kind == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.RightButton:
+        left, right = Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton
+        button = self._window_drag_button
+        if kind == QEvent.Type.MouseButtonPress and button is None:
+            pressed = event.button()
             pos = event.globalPosition().toPoint()
-            if not self._rmb_dragging:
-                if (pos - self._rmb_press).manhattanLength() < self.RMB_DRAG:
+            if pressed == left:
+                strip = self.title_strip
+                if not self._fullscreen or not (obj is strip or strip.isAncestorOf(obj)) \
+                        or strip.over_button(strip.mapFromGlobal(pos)):
+                    return False
+                self._press_origin = "title"
+            elif pressed != right:
+                return False
+            self._window_drag_button = pressed
+            self._window_drag_press = pos
+            return True
+        if button is None:
+            return False
+        if kind == QEvent.Type.MouseMove:
+            if not event.buttons() & button:
+                self._finish_window_drag()
+                return False
+            pos = event.globalPosition().toPoint()
+            if not self._window_dragging:
+                if (pos - self._window_drag_press).manhattanLength() < self.WINDOW_DRAG_THRESHOLD:
                     return True
-                self._start_window_drag(self._rmb_press)
+                self._window_dragging = True
+                self._start_window_drag(self._window_drag_press)
+                if button == left:
+                    # Restoring the window hides the strip that received the press.
+                    self.grabMouse()
             self.move(pos - self._drag_offset)
             return True
-        if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
-            press, dragging = self._rmb_press, self._rmb_dragging
-            self._rmb_press, self._rmb_dragging = None, False
-            if not dragging:
+        if kind == QEvent.Type.MouseButtonRelease and event.button() == button:
+            press, dragging = self._window_drag_press, self._window_dragging
+            self._finish_window_drag()
+            if button == right and not dragging:
                 self.show_menu(press)
             return True
         return False
 
+    def _finish_window_drag(self) -> None:
+        left = self._window_drag_button == Qt.MouseButton.LeftButton
+        self._window_drag_button = None
+        self._window_dragging = False
+        if left:
+            self._press_origin = ""
+            if QWidget.mouseGrabber() is self:
+                self.releaseMouse()
+
     def _start_window_drag(self, press: QPoint) -> None:
-        self._rmb_dragging = True
         frame = self.frameGeometry()
         rel_x = (press.x() - frame.x()) / max(1, frame.width())
         offset_y = press.y() - frame.y()
