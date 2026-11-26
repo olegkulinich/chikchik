@@ -1474,11 +1474,20 @@ class MainWindow(QMainWindow):
             self._error("Could not open video", str(exc))
             return
         self._open_info(path, info)
-        startup_log.mark("UI filled for the file")
 
     def _open_info(self, path: Path, info: MediaInfo, keep: dict | None = None) -> None:
+        if USE_D3D11:
+            self.video.prepare_file_replacement(
+                lambda image: self._apply_open_info(path, info, keep, image))
+        else:
+            self._apply_open_info(path, info, keep)
+
+    def _apply_open_info(self, path: Path, info: MediaInfo, keep: dict | None,
+                         replacement_image: QImage | None = None) -> None:
         """Load a probed file or sequence. `keep` (T36 fps change) restores trim, crop and
         the frame instead of the clean state."""
+        if self.worker is not None:
+            return
         sequence = info.sequence
         if sequence is not None:
             path = sequence.first_file if keep is None else path
@@ -1518,7 +1527,8 @@ class MainWindow(QMainWindow):
                         autoplay=autoplay,                                 # T35
                         frame_duration=info.frame_duration,
                         sequence_fps=info.fps if sequence is not None else None,
-                        decoder=decoder_options(info))                     # E4
+                        decoder=decoder_options(info),                      # E4
+                        replacement_image=replacement_image)
         startup_log.mark("video.load returned")
         if keep is None:
             start_format = self.config.start_format()                      # T25
@@ -1546,6 +1556,7 @@ class MainWindow(QMainWindow):
         elif sequence is not None and sequence.missing():
             self.toast.show_message(f"Missing frames: {format_ranges(sequence.missing())}",
                                     action=False, ms=6000)
+        startup_log.mark("UI filled for the file")
 
     def set_audio(self, track: AudioTrack | None) -> None:
         self.audio = track
