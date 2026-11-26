@@ -133,6 +133,8 @@ class VideoView(VideoSurface):
             self.player = mpv.MPV(**trace, **options)
         startup_log.mark("mpv core created")
         self._mpv = mpv
+        self._playing_entry = None
+        self._replacement_entry = None
         self._render = None
         self._get_proc = None
         self._frame_ready.connect(self.update, Qt.ConnectionType.QueuedConnection)
@@ -538,8 +540,23 @@ class VideoView(VideoSurface):
                 self._composition_needs_attach = True
             if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                 self._seek_done.emit()
+            if USE_D3D11:
+                self._on_native_file_event(event)
         except Exception:
             pass
+
+    def _on_native_file_event(self, event) -> None:
+        ids = self._mpv.MpvEventID
+        event_id = event.event_id.value
+        if event_id == ids.START_FILE:
+            self._playing_entry = event.data.playlist_entry_id
+        if self._replacement_entry is None:
+            return
+        entry, token = self._replacement_entry
+        if ((event_id == ids.PLAYBACK_RESTART and self._playing_entry == entry)
+                or (event_id == ids.END_FILE and event.data.playlist_entry_id == entry)):
+            self._replacement_entry = None
+            self._replacement_ready.emit(token)
 
     def _command(self, *args) -> None:
         """Fire-and-forget: never wait for the mpv core in the GUI thread."""
@@ -605,6 +622,14 @@ class VideoView(VideoSurface):
         """`path` may be an mpv URL (T36: mf://@list for an image sequence). `decoder`
         (E4): per-file decoder loadfile options ("hwdec=no,vd-lavc-threads=4"), "" = the
         global defaults."""
+        replacement = None
+        if USE_D3D11 and self.has_video and (self._scale is not None
+                                             or self._replacement_token is not None):
+            # mpv can redraw the outgoing frame with the incoming file's fit zoom.
+            # Clip the native child until this load has rendered a frame.
+            replacement = self._replacement_token = object()
+            self.sync_surface()
+            theme.dwm_flush()
         self.frame_size = frame_size
         self.frame_duration_s = frame_duration
         self.has_video = True
@@ -633,7 +658,8 @@ class VideoView(VideoSurface):
             startup_log.mark(f"decoder: {decoder or 'default'}")
             startup_log.mark("mpv: loadfile sent", once=True)
             tracks = f"aid={aid if aid else 'no'},sid={sid if sid else 'no'}"
-            self._loadfile(str(path), tracks + (f",{decoder}" if decoder else ""), aid, sid)
+            self._loadfile(str(path), tracks + (f",{decoder}" if decoder else ""), aid, sid,
+                           replacement=replacement)
         self._preloaded = None
         self._preload_waiting = False
         self._set("pause", paused)
@@ -641,7 +667,8 @@ class VideoView(VideoSurface):
 
     _KEEP = object()        # preload: tracks stay as they are
 
-    def _loadfile(self, url: str, options: str, aid=_KEEP, sid=_KEEP) -> None:
+    def _loadfile(self, url: str, options: str, aid=_KEEP, sid=_KEEP,
+                  *, replacement=None) -> None:
         """Tracks (and E4: the decoder) go with the loadfile as per-file options: an async
         `set aid` sent right after an async loadfile reaches the file being closed and is
         lost (sequence → mp4 opened silent). Named arguments read the same in mpv ≤ 0.37
@@ -651,13 +678,30 @@ class VideoView(VideoSurface):
             self._command("loadfile", url, "replace")
             return
 
-        def reply(error, _data) -> None:                    # mpv event thread
-            if error:
+        def track_replacement(error, data) -> None:         # mpv event thread
+            if replacement is not None:
+                entry = data.get("playlist_entry_id") if isinstance(data, dict) else None
+                if not error and entry is not None:
+                    self._replacement_entry = (entry, replacement)
+                else:
+                    self._replacement_ready.emit(replacement)
+
+        def reply(error, data) -> None:                     # mpv event thread
+            if not error:
+                track_replacement(error, data)
+                return
+            if replacement is None:
                 self._command("loadfile", url, "replace")
-                if aid is not self._KEEP:
-                    self.set_audio(aid)
-                if sid is not self._KEEP:
-                    self.set_subtitle(sid)
+            else:
+                try:
+                    self.player.command_async("loadfile", url, "replace",
+                                              callback=track_replacement)
+                except Exception:
+                    self._replacement_ready.emit(replacement)
+            if aid is not self._KEEP:
+                self.set_audio(aid)
+            if sid is not self._KEEP:
+                self.set_subtitle(sid)
 
         try:
             self.player.command_async("loadfile", url=url, flags="replace", options=options,
@@ -926,15 +970,19 @@ class VideoView(VideoSurface):
                 self.player.unobserve_property(name, self._on_property)
             self.player.pause = True
             return   # app.main terminates mpv after Qt releases the native windows
-        self.makeCurrent()
-        if self._render is not None:
-            self._render.free()
-            self._render = None
-        self.doneCurrent()
         try:
-            self.player.terminate()
-        except Exception:
-            pass
+            self.makeCurrent()
+            try:
+                if self._render is not None:
+                    self._render.free()
+                    self._render = None
+            finally:
+                self.doneCurrent()
+        finally:
+            try:
+                self.player.terminate()
+            except Exception:
+                pass
 
     # --------------------------------------------------------- mouse
     # D (T100, T51, T52, D1.1): Crop off → drag = frame scrub. Crop on → a press on
