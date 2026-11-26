@@ -618,18 +618,17 @@ class VideoView(VideoSurface):
     def load(self, path: Path | str, frame_size: tuple[int, int], aid: int | None,
              sid: int | None = None, autoplay: bool = True,
              frame_duration: float | None = None, sequence_fps: float | None = None,
-             decoder: str = "") -> None:
+             decoder: str = "", replacement_image=None) -> None:
         """`path` may be an mpv URL (T36: mf://@list for an image sequence). `decoder`
         (E4): per-file decoder loadfile options ("hwdec=no,vd-lavc-threads=4"), "" = the
         global defaults."""
         replacement = None
-        if USE_D3D11 and self.has_video and (self._scale is not None
-                                             or self._replacement_token is not None):
-            # mpv can redraw the outgoing frame with the incoming file's fit zoom.
-            # Clip the native child until this load has rendered a frame.
-            replacement = self._replacement_token = object()
-            self.sync_surface()
-            theme.dwm_flush()
+        if USE_D3D11 and (replacement_image is not None or (
+                self._first_frame_ready and self.has_video and self._scale is not None)
+                or self._replacement_token is not None):
+            # The zoom reset can redraw the outgoing frame. Hide its HWND until the
+            # incoming file renders, using the viewport snapshot while it loads.
+            replacement = self.begin_replacement(replacement_image)
         self.frame_size = frame_size
         self.frame_duration_s = frame_duration
         self.has_video = True
@@ -963,6 +962,8 @@ class VideoView(VideoSurface):
     def shutdown(self) -> None:
         if USE_D3D11:
             self._closing = True
+            self._replacement_capture = None
+            self._reveal_timer.stop()
             self.layer.hide()
             self._silence_timer.stop()
             self.player.unregister_event_callback(self._on_event)
