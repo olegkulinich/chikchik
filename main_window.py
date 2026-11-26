@@ -853,8 +853,11 @@ class MainWindow(QMainWindow):
         kind = event.type()
         if kind == QEvent.Type.Resize and obj is getattr(self, "_central", None):
             self._place_overlay()
-        if kind == QEvent.Type.Resize and obj is self.video and self._update_button is not None:
-            self._place_update_button()
+        if kind == QEvent.Type.Resize and obj is self.video:
+            if self._update_button is not None:
+                self._place_update_button()
+            if getattr(self, "_ui_ready", False) and self.toast.isVisible():
+                self.toast.reposition()
         in_window = isinstance(obj, QWidget) and obj.window() is self
         if (self._jkl is not None or self._jkl_tap is not None) \
                 and kind == QEvent.Type.WindowDeactivate and obj is self:
@@ -3385,11 +3388,6 @@ class MainWindow(QMainWindow):
     def _error(self, title: str, text: str) -> None:
         box = QMessageBox(QMessageBox.Icon.NoIcon, title, text, QMessageBox.StandardButton.Ok, self)
         box.exec()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if getattr(self, "_ui_ready", False) and self.toast.isVisible():
-            self.toast.reposition()
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
