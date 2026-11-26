@@ -187,6 +187,9 @@ QPushButton#TitleButton, QPushButton#TitleClose {{
 }}
 QPushButton#TitleButton:hover {{ background: {BUTTON_HOVER}; color: {TEXT}; }}
 QPushButton#TitleClose:hover {{ background: #C42B1C; color: #FFFFFF; }}
+QPushButton#RecentRemove {{ background: transparent; border: none; color: {DIM}; padding: 0;
+    min-height: 20px; max-height: 20px; }}
+QPushButton#RecentRemove:hover {{ background: {ACTIVE_HOVER}; color: {TEXT}; }}
 QPushButton#PopoverClose {{ background: transparent; border: none; color: {DIM}; padding: 0;
     min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; }}
 QPushButton#PopoverClose:hover {{ background: transparent; color: {TEXT}; }}

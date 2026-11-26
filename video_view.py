@@ -446,6 +446,8 @@ class VideoView(VideoSurface):
             self._set_zoom(None)
             return
         target = min(self.MAX_SCALE, current * self.ZOOM_STEP ** steps)
+        if steps > 0 and current < 1.0 < target:
+            target = 1.0
         self._actual = False
         if steps < 0 and target <= fit * 1.0001:
             self._set_zoom(None)

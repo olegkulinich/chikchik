@@ -132,7 +132,8 @@ class MenuRow(QWidget):
     def __init__(self, menu: QMenu, text: str, hint: str = "", enabled: bool = True,
                  checked: bool = False, callback=None, check_column: bool = False,
                  cells: list[tuple[str, int, str, int]] | None = None,
-                 sub: str = "", submenu: bool = False, root: QMenu | None = None):
+                 sub: str = "", submenu: bool = False, root: QMenu | None = None,
+                 remove_callback=None):
         """`cells` replaces the right side: (text, fixed width, color or "", gap before).
         `sub` — dim text right after the label (Open Recent: the folder).
         `submenu` — the row opens a submenu (▸, a click doesn't close the menu).
@@ -190,6 +191,13 @@ class MenuRow(QWidget):
             if check_column:
                 check.setFixedWidth(10)
             right.addWidget(check)
+        if remove_callback is not None:
+            remove = button("×", tooltip="Remove from Open Recent")
+            remove.setObjectName("RecentRemove")
+            remove.setAccessibleName(f"Remove {text} from Open Recent")
+            remove.setFixedSize(20, 20)
+            remove.clicked.connect(remove_callback)
+            right.addWidget(remove)
         layout.addLayout(right)
 
     # Highlight = the menu's "hot" row, set by a cursor poll (_MenuHover): Qt's hover,
@@ -314,13 +322,12 @@ class _Reveal:
 
 
 class _TitleStrip(QWidget):
-    """T27 Hide UI: the title bar, shown on hover over the top edge. On Windows the
-    strip is the native caption (WM_NCHITTEST) — snap, double-click maximize."""
+    """Title bar shown on hover in fullscreen and in windowed Hide UI."""
 
     HEIGHT = 32
     BUTTON_W = 46
 
-    def __init__(self, window: QMainWindow, parent: QWidget):
+    def __init__(self, window: MainWindow, parent: QWidget):
         super().__init__(parent)
         self.window_ = window
         self.setObjectName("TitleStrip")
@@ -358,22 +365,30 @@ class _TitleStrip(QWidget):
 
     def _toggle_maximized(self) -> None:
         w = self.window_
-        w.showNormal() if w.isMaximized() else w.showMaximized()
+        if w.isFullScreen():
+            w.toggle_fullscreen()
+        elif w.isMaximized():
+            w.showNormal()
+        else:
+            w.showMaximized()
 
     def sync(self) -> None:
-        """Maximize ↔ restore glyph."""
-        maximized = self.window_.isMaximized()
+        """Use the restore glyph when the middle button leaves fullscreen."""
+        fullscreen = self.window_.isFullScreen()
+        restore = fullscreen or self.window_.isMaximized()
+        self.buttons[1].setToolTip("Exit Fullscreen" if fullscreen else "")
         if self._glyph_font:
-            self.buttons[1].setText("\uE923" if maximized else "\uE922")
+            self.buttons[1].setText("\uE923" if restore else "\uE922")
         else:
-            self.buttons[1].setText("❐" if maximized else "□")
+            self.buttons[1].setText("❐" if restore else "□")
 
     def over_button(self, local: QPoint) -> bool:
         return any(b.geometry().contains(local) for b in self.buttons)
 
     # Elsewhere than Windows the strip isn't a native caption — move/maximize by hand.
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.window_.windowHandle():
+        if event.button() == Qt.MouseButton.LeftButton and not self.window_.isFullScreen() \
+                and self.window_.windowHandle():
             self.window_.windowHandle().startSystemMove()
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -496,12 +511,13 @@ class MainWindow(QMainWindow):
         self._overlay = False
         self._ui_mode = self.config.ui_mode()      # T27: normal | minimal | hidden
         self._frame_hidden = False
-        self._press_origin = ""             # "video" | "panel" while a button is held
+        self._press_origin = ""             # "video" | "panel" | "title" while held
         self._cursor_hidden = False
         self._cursor_pos = QPoint()
         self._cursor_still_since = time.monotonic()
-        self._rmb_press: QPoint | None = None
-        self._rmb_dragging = False
+        self._window_drag_button: Qt.MouseButton | None = None
+        self._window_drag_press = QPoint()
+        self._window_dragging = False
         self._drag_offset = QPoint()
 
         self._build_ui()
@@ -783,7 +799,7 @@ class MainWindow(QMainWindow):
             field.left.connect(lambda: self.video.setFocus())
 
         startup_log.mark("UI: central widget set")
-        central.toast_anchor = lambda: self.video.geometry()
+        central.toast_anchor = self._toast_anchor
         self.toast = Toast(central, native_overlay=USE_D3D11)
         self.toast.action_clicked.connect(self._show_in_folder)
         self._toast_path: Path | None = None
@@ -896,8 +912,12 @@ class MainWindow(QMainWindow):
                 self.export(ask=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
             event.accept()
             return True
+        if kind == QEvent.Type.UngrabMouse and obj is self \
+                and self._window_drag_button == Qt.MouseButton.LeftButton:
+            self._finish_window_drag()
         if in_window and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
-                                  QEvent.Type.MouseButtonRelease) and self._rmb_event(obj, event):
+                                  QEvent.Type.MouseButtonRelease) \
+                and self._window_drag_event(obj, event):
             return True
         if in_window and kind == QEvent.Type.ContextMenu \
                 and event.reason() == event.Reason.Mouse:
@@ -1361,14 +1381,34 @@ class MainWindow(QMainWindow):
 
     def _recent_menu(self, root: QMenu) -> QMenu:
         sub = self._new_menu()
-        metrics = QFontMetrics(self.font())
-        for i, path in enumerate(self._recent()):
-            folder = metrics.elidedText(str(path.parent), Qt.TextElideMode.ElideMiddle, 260)
-            action = QWidgetAction(sub)
-            action.setDefaultWidget(MenuRow(
-                sub, path.name, display_key(MENU_SHORTCUTS["open_recent"][1]) if i == 0 else "",
-                callback=lambda p=path: self.open_recent(p), sub=folder, root=root))
-            sub.addAction(action)
+
+        def remove(path: Path) -> None:
+            self.config.remove_recent(str(path))
+            sub._hover._set(None)
+            sub.clear()
+            if self._recent():
+                populate()
+            else:
+                sub.close()
+                root.close()
+
+        def queue_remove(path: Path) -> None:
+            # Rebuild after the click finishes, since clear() deletes its button.
+            QTimer.singleShot(0, sub, lambda: remove(path))
+
+        def populate() -> None:
+            metrics = QFontMetrics(self.font())
+            shortcut = display_key(MENU_SHORTCUTS["open_recent"][1])
+            for i, path in enumerate(self._recent()):
+                folder = metrics.elidedText(str(path.parent), Qt.TextElideMode.ElideMiddle, 260)
+                action = QWidgetAction(sub)
+                action.setDefaultWidget(MenuRow(
+                    sub, path.name, shortcut if i == 0 else "",
+                    callback=lambda p=path: self.open_recent(p), sub=folder, root=root,
+                    remove_callback=lambda _checked, p=path: queue_remove(p)))
+                sub.addAction(action)
+
+        populate()
         return sub
 
     def open_recent(self, path: Path | None = None) -> None:
@@ -2515,8 +2555,8 @@ class MainWindow(QMainWindow):
             self.showNormal()
         self._apply_layout()
 
-    # ------------------------------------------------ right-button drag (PureRef)
-    RMB_DRAG = 5             # px before a right press moves the window instead of the menu
+    # ------------------------------------------------ window drag (PureRef / fullscreen title)
+    WINDOW_DRAG_THRESHOLD = 5  # px of movement before a press starts moving the window
 
     @staticmethod
     def _is_export_key(event) -> bool:
@@ -2526,34 +2566,60 @@ class MainWindow(QMainWindow):
             return False
         return event.key() == Qt.Key.Key_E or (win_frame.ENABLED and event.nativeVirtualKey() == 0x45)
 
-    def _rmb_event(self, obj, event) -> bool:
-        """Right button anywhere in the window: click → menu, drag → move the window.
-        Dragging out of fullscreen (or a maximized window) restores it under the cursor."""
+    def _window_drag_event(self, obj: QWidget, event) -> bool:
+        """Drag with RMB anywhere or LMB on the fullscreen title outside its buttons."""
         kind = event.type()
-        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
-            self._rmb_press = event.globalPosition().toPoint()
-            self._rmb_dragging = False
-            return True
-        if self._rmb_press is None:
-            return False
-        if kind == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.RightButton:
+        left, right = Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton
+        button = self._window_drag_button
+        if kind == QEvent.Type.MouseButtonPress and button is None:
+            pressed = event.button()
             pos = event.globalPosition().toPoint()
-            if not self._rmb_dragging:
-                if (pos - self._rmb_press).manhattanLength() < self.RMB_DRAG:
+            if pressed == left:
+                strip = self.title_strip
+                if not self._fullscreen or not (obj is strip or strip.isAncestorOf(obj)) \
+                        or strip.over_button(strip.mapFromGlobal(pos)):
+                    return False
+                self._press_origin = "title"
+            elif pressed != right:
+                return False
+            self._window_drag_button = pressed
+            self._window_drag_press = pos
+            return True
+        if button is None:
+            return False
+        if kind == QEvent.Type.MouseMove:
+            if not event.buttons() & button:
+                self._finish_window_drag()
+                return False
+            pos = event.globalPosition().toPoint()
+            if not self._window_dragging:
+                if (pos - self._window_drag_press).manhattanLength() < self.WINDOW_DRAG_THRESHOLD:
                     return True
-                self._start_window_drag(self._rmb_press)
+                self._window_dragging = True
+                self._start_window_drag(self._window_drag_press)
+                if button == left:
+                    # Restoring the window hides the strip that received the press.
+                    self.grabMouse()
             self.move(pos - self._drag_offset)
             return True
-        if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
-            press, dragging = self._rmb_press, self._rmb_dragging
-            self._rmb_press, self._rmb_dragging = None, False
-            if not dragging:
+        if kind == QEvent.Type.MouseButtonRelease and event.button() == button:
+            press, dragging = self._window_drag_press, self._window_dragging
+            self._finish_window_drag()
+            if button == right and not dragging:
                 self.show_menu(press)
             return True
         return False
 
+    def _finish_window_drag(self) -> None:
+        left = self._window_drag_button == Qt.MouseButton.LeftButton
+        self._window_drag_button = None
+        self._window_dragging = False
+        if left:
+            self._press_origin = ""
+            if QWidget.mouseGrabber() is self:
+                self.releaseMouse()
+
     def _start_window_drag(self, press: QPoint) -> None:
-        self._rmb_dragging = True
         frame = self.frameGeometry()
         rel_x = (press.x() - frame.x()) / max(1, frame.width())
         offset_y = press.y() - frame.y()
@@ -2629,13 +2695,12 @@ class MainWindow(QMainWindow):
                 self._show_cursor()
         if not self._fullscreen:
             self.setMinimumHeight(self.MIN_HEIGHT[mode])
-        # the hover title strip: Hide UI in a window only
-        strip = mode == "hidden" and not self._fullscreen
-        if not strip:
+        title_overlay = self._fullscreen or mode == "hidden"
+        if not title_overlay:
             self._title_reveal.set_shown(False, animate=False)
-        self._title_reveal.active = strip
+        self._title_reveal.active = title_overlay
         self._panels_reveal.active = overlay
-        frame_hidden = strip
+        frame_hidden = mode == "hidden" and not self._fullscreen
         if frame_hidden != self._frame_hidden:
             self._frame_hidden = frame_hidden
             win_frame.refresh(self, frame_hidden)
@@ -2662,7 +2727,17 @@ class MainWindow(QMainWindow):
             self.panels.raise_()
         self.title_strip.setGeometry(0, 0, central.width(), self.title_strip.HEIGHT)
         self.title_strip.raise_()
+        if self.toast.isVisible():
+            self.toast.reposition()
         self.toast.raise_()
+
+    def _toast_anchor(self) -> QRect:
+        area = self.video.geometry()
+        if self._fullscreen:
+            # Reserve the control panel's full height even when it is hidden.
+            panel_top = self._central.height() - self.panels.sizeHint().height()
+            area.setBottom(min(area.bottom(), panel_top - 1))
+        return area
 
     CURSOR_HIDE_S = 1.5      # fullscreen: hide a still cursor
 
@@ -2688,7 +2763,9 @@ class MainWindow(QMainWindow):
                     and reveal.widget.isAncestorOf(focus)
                 want = reveal.zone().contains(pos) or editing or (popup and reveal.shown)
             if want != reveal.shown:
-                reveal.set_shown(want, animate=not want)
+                # D3D11 clips video under visible controls, so fading would expose
+                # the window background until the controls are fully hidden.
+                reveal.set_shown(want, animate=not want and not USE_D3D11)
                 if want:
                     self._place_overlay()
         self._update_cursor(global_pos, held)
@@ -2702,7 +2779,8 @@ class MainWindow(QMainWindow):
             self._show_cursor()
             return
         if (self._fullscreen and not self._cursor_hidden and not held
-                and not self._panels_reveal.shown and QApplication.activePopupWidget() is None
+                and not self._panels_reveal.shown and not self._title_reveal.shown
+                and QApplication.activePopupWidget() is None
                 and not self._popover_open()
                 and self.isActiveWindow()
                 and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
