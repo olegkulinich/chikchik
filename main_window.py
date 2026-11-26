@@ -89,6 +89,7 @@ from config import (ESC_KEY, FORMAT_HOTKEYS, MENU_ALIASES, MENU_SHORTCUTS, SCALE
 from popovers import HotkeysPopover, SettingsPopover
 from updates import UpdateChecker
 from video_view import VideoView
+from video_backend import USE_D3D11
 from widgets import (
     FieldGroup,
     _FieldEdit,
@@ -511,7 +512,7 @@ class MainWindow(QMainWindow):
         # The QWindow is replaced once the OpenGL video is embedded, so tag it after
         # _build_ui (WA_NativeWindow makes the QWindow without creating the native one).
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-        if self.windowHandle() is not None:
+        if not USE_D3D11 and self.windowHandle() is not None:
             self.windowHandle().setProperty("_q_has_border_in_fullscreen", True)
         startup_log.mark("MainWindow: native window tagged")
         # E2: Settings / Hotkeys are built on first open (see the properties below)
@@ -602,11 +603,12 @@ class MainWindow(QMainWindow):
     # ================================================================ UI
     def _build_ui(self) -> None:
         central = _Central()
+        self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setContentsMargins(theme.GAP, 0, theme.GAP, theme.GAP2)   # T24: no gap above the video
         root.setSpacing(0)
 
-        self.video = VideoView()
+        self.video = VideoView(central)
         self._muted = self.config.flag("muted")  # remembered (user, T67 build 2)
         self._muted_told = False                 # "Muted" toast shown for this file
         if self._muted:
@@ -780,15 +782,17 @@ class MainWindow(QMainWindow):
                       *self.crop_fields.values()):
             field.left.connect(lambda: self.video.setFocus())
 
-        self.setCentralWidget(central)
         startup_log.mark("UI: central widget set")
         central.toast_anchor = lambda: self.video.geometry()
-        self.toast = Toast(central)
+        self.toast = Toast(central, native_overlay=USE_D3D11)
         self.toast.action_clicked.connect(self._show_in_folder)
         self._toast_path: Path | None = None
 
         # T22/T27: bars shown on hover
         self.title_strip = _TitleStrip(self, central)
+        if USE_D3D11:
+            for control in (self.title_strip, self.panels):
+                self.video.watch_control(control)
         self._panels_reveal = _Reveal(self, self.panels, "panel", "bottom", shown=True)
         self._title_reveal = _Reveal(self, self.title_strip, "title", "top", shown=False)
 
@@ -2907,6 +2911,8 @@ class MainWindow(QMainWindow):
         if self._update_button is None:
             self._update_button = button(tooltip="Open the release page")
             self._update_button.setParent(self.video)
+            if USE_D3D11:
+                self.video.watch_control(self._update_button)
             self._update_button.clicked.connect(self._open_update_page)
         self._update_page = known["page"] or updates.RELEASES_URL
         self._update_button.setText(f"Update to {version}")

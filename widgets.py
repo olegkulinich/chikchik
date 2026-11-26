@@ -1123,8 +1123,15 @@ class Popover(QFrame):
 class Toast(QFrame):
     action_clicked = Signal()
 
-    def __init__(self, parent: QWidget):
+    def __init__(self, parent: QWidget, *, native_overlay: bool = False):
         super().__init__(parent)
+        self._native_overlay = native_overlay
+        if native_overlay:
+            # DWM composites the rounded corners directly over the native video.
+            self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setAttribute(Qt.WA_ShowWithoutActivating)
+            parent.window().installEventFilter(self)
         self.setObjectName("Toast")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 6, 6)
@@ -1140,6 +1147,17 @@ class Toast(QFrame):
         self._timer.timeout.connect(self.hide)
         self.hide()
 
+    def paintEvent(self, event):
+        if not self._native_overlay:
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QColor(theme.STROKE))
+        painter.setBrush(QColor(theme.BUTTON))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                                theme.RADIUS, theme.RADIUS)
+
     def show_message(self, text: str, action: bool, error: bool = False, ms: int = 6000) -> None:
         self.label.setText(text)
         self.label.setStyleSheet(f"color: {theme.ERROR_FG};" if error else "")
@@ -1154,4 +1172,11 @@ class Toast(QFrame):
         parent = self.parentWidget()
         anchor = getattr(parent, "toast_anchor", None)
         area = anchor() if anchor else parent.rect()
-        self.move(area.center().x() - self.width() // 2, area.bottom() - self.height() - theme.GAP2)
+        position = QPoint(area.center().x() - self.width() // 2,
+                          area.bottom() - self.height() - theme.GAP2)
+        self.move(parent.mapToGlobal(position) if self.isWindow() else position)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Move and self.isVisible():
+            self.reposition()
+        return super().eventFilter(obj, event)

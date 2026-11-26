@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import gl_warm  # noqa: I001 — E2 (A): before PySide6, so the warm-up overlaps the imports
+from video_backend import USE_D3D11
 
 # E4: desktop OpenGL straight away — skips Qt's GPU blacklist probe (bench: native window
 # −6 ms, window −10…−20 ms). Set QT_OPENGL=angle / software by hand to override.
@@ -96,10 +97,11 @@ def main() -> int:
 
     if startup_log.TRACE:
         install_qt_trace()
-    fmt = QSurfaceFormat.defaultFormat()
-    fmt.setSwapInterval(1)
-    QSurfaceFormat.setDefaultFormat(fmt)
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    if not USE_D3D11:
+        fmt = QSurfaceFormat.defaultFormat()
+        fmt.setSwapInterval(1)
+        QSurfaceFormat.setDefaultFormat(fmt)
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
     app = QApplication(sys.argv)
     app.setApplicationName("ChikChik")
@@ -160,7 +162,7 @@ def main() -> int:
         nonlocal uncloaked
         if not uncloaked:
             uncloaked = True
-            if flush:      # T91: wait until DWM has composed the swapped frame (≤ 1 vsync)
+            if USE_D3D11 or flush:      # T91: wait until DWM has composed the swapped frame (≤ 1 vsync)
                 theme.dwm_flush()
                 startup_log.mark("DwmFlush before uncloak")
             theme.cloak(window, False)
@@ -173,7 +175,29 @@ def main() -> int:
             startup_log.mark("uncloak by 1 s safety timer (no frame yet)")
         uncloak("1 s safety timer")
 
-    window.video.frameSwapped.connect(lambda: uncloak())
+    if USE_D3D11:
+        # The video widget paints inside Qt's backing-store update. Wait until
+        # that event returns and the complete window has been flushed to DWM.
+        def show_initial_surface():
+            video = window.video
+            if not video._ready:
+                return
+            if paths and video.has_video and not video._first_frame_ready:
+                return
+            uncloak("Qt backing store flushed")
+
+        window.video.surface_ready.connect(show_initial_surface, Qt.QueuedConnection)
+        if paths:
+            window.video._seek_done.connect(show_initial_surface, Qt.QueuedConnection)
+        if startup_log.ENABLED and paths:
+            def finish_native_trace():
+                if uncloaked and window.video._startup_restart:
+                    startup_log.finish("D3D11: window shown and mpv ready (screen timed externally)")
+
+            window.video.surface_ready.connect(finish_native_trace, Qt.QueuedConnection)
+            window.video._seek_done.connect(finish_native_trace, Qt.QueuedConnection)
+    else:
+        window.video.frameSwapped.connect(lambda: uncloak())
     QTimer.singleShot(1000, uncloak_timer)    # safety net if no frame arrives
     window.show()
     startup_log.mark("window.show()")
@@ -186,7 +210,15 @@ def main() -> int:
     if startup_log.ENABLED:
         QTimer.singleShot(0, lambda: startup_log.mark("event loop running"))
         QTimer.singleShot(15000, lambda: startup_log.finish("gave up: 15 s without a video frame"))
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        if USE_D3D11:
+            import shiboken6
+            player = window.video.player
+            window.video.close_composition()
+            shiboken6.delete(app)
+            player.terminate()
 
 
 if __name__ == "__main__":

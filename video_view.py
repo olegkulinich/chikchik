@@ -1,4 +1,4 @@
-"""mpv rendered into a QOpenGLWidget, so the crop frame and clicks live in Qt."""
+"""Video playback, crop geometry and input shared by both presentation paths."""
 from __future__ import annotations
 
 import math
@@ -9,7 +9,12 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QOpenGLContext, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication
-from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from video_backend import USE_D3D11
+
+if USE_D3D11:
+    from d3d11_view import D3D11Surface as VideoSurface
+else:
+    from PySide6.QtOpenGLWidgets import QOpenGLWidget as VideoSurface
 
 import perf_log
 import startup_log
@@ -34,7 +39,7 @@ def _silence_minutes() -> float:
         return 10.0
 
 
-class VideoView(QOpenGLWidget):
+class VideoView(VideoSurface):
     crop_drawn = Signal(QRect)         # new crop rect in frame pixels (draw / move / resize, on release)
     crop_changing = Signal(QRect)      # D: the rect while it is dragged (fields follow, no history)
     scrub_started = Signal()           # T100: drag on the video with Crop off
@@ -81,6 +86,18 @@ class VideoView(QOpenGLWidget):
             # stall while it woke up (user test 2026-11-14: gone with this option).
             audio_stream_silence="yes",
         )
+        if USE_D3D11:
+            options.update(self.output_options)
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if local_app_data:
+                # Embedded mpv needs an explicit directory to reuse compiled shaders.
+                cache_dir = Path(local_app_data) / "ChikChik" / "shader-cache"
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass  # Playback can proceed if the cache directory is unavailable.
+                else:
+                    options["gpu_shader_cache_dir"] = str(cache_dir)
         if os.environ.get("QTC_SAFE_GL"):     # software GL in tests
             options.update(gpu_dumb_mode="yes", hwdec="no")
         # E2 (55g): extra mpv options for experiments without a new build, e.g.
@@ -513,6 +530,10 @@ class VideoView(QOpenGLWidget):
                 if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                     self._startup_restart = True
                     self._frame_ready.emit()
+            if USE_D3D11 and self.composition is not None and event_id in (
+                self._mpv.MpvEventID.START_FILE, self._mpv.MpvEventID.VIDEO_RECONFIG
+            ):
+                self._composition_needs_attach = True
             if event_id == self._mpv.MpvEventID.PLAYBACK_RESTART:
                 self._seek_done.emit()
         except Exception:
@@ -543,7 +564,7 @@ class VideoView(QOpenGLWidget):
         self._set("alpha", "blend-tiles")    # mpv ≤ 0.37
         self._set("background", "tiles")     # mpv ≥ 0.38
         self._set("pause", not autoplay)
-        if self._render is not None:
+        if USE_D3D11 or self._render is not None:
             self._send_preload()
 
     _preload_waiting = False
@@ -883,6 +904,15 @@ class VideoView(QOpenGLWidget):
         self._command("frame-back-step" if backward else "frame-step")
 
     def shutdown(self) -> None:
+        if USE_D3D11:
+            self._closing = True
+            self.layer.hide()
+            self._silence_timer.stop()
+            self.player.unregister_event_callback(self._on_event)
+            for name in self.OBSERVED:
+                self.player.unobserve_property(name, self._on_property)
+            self.player.pause = True
+            return   # app.main terminates mpv after Qt releases the native windows
         self.makeCurrent()
         if self._render is not None:
             self._render.free()
