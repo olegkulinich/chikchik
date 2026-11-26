@@ -29,6 +29,7 @@ class CropLayer(QWidget):
 
 class D3D11Surface(QWidget):
     surface_ready = Signal()
+    _replacement_ready = Signal(object)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -70,7 +71,10 @@ class D3D11Surface(QWidget):
         self._ready = False
         self._closing = False
         self._first_frame_ready = False
+        self._replacement_token = None
+        self._replacement_ready.connect(self._finish_replacement, Qt.QueuedConnection)
         self._composition_needs_attach = self.composition is not None
+        self._missing_swapchain_logged = False
         self._seek_done.connect(self._show_rendered_surface, Qt.QueuedConnection)
 
     def _show_rendered_surface(self):
@@ -79,12 +83,24 @@ class D3D11Surface(QWidget):
         if self._composition_needs_attach:
             self._composition_needs_attach = False
             swapchain = getattr(self.player, "display_swapchain", None)
-            if swapchain:
-                self.composition.set_swapchain(swapchain)
-            else:
+            if not swapchain:
                 self._composition_needs_attach = True
+                if not self._missing_swapchain_logged:
+                    import logging
+
+                    self._missing_swapchain_logged = True
+                    message = "DirectComposition: mpv did not expose a display swap chain"
+                    startup_log.mark(message)
+                    logging.getLogger(__name__).warning(message)
+                return
+            self.composition.set_swapchain(swapchain)
         if not self._first_frame_ready:
             self._first_frame_ready = True
+            self.sync_surface()
+
+    def _finish_replacement(self, token):
+        if token is self._replacement_token:
+            self._replacement_token = None
             self.sync_surface()
 
     def _physical_size(self):
@@ -125,9 +141,10 @@ class D3D11Surface(QWidget):
                 region -= QRegion(QRect(corner, control.size()))
         # Keep the native child mapped at its real size during preroll. A
         # hidden QWidget can leave mpv rendering into its initial 100x30 HWND.
-        # The parent clips this child until the first frame is ready.
+        # The parent clips this child until the incoming frame is ready.
+        preroll = not self._first_frame_ready or self._replacement_token is not None
         geometry = self.rect()
-        if not self._first_frame_ready:
+        if preroll:
             geometry.moveLeft(-geometry.width())
         if self.composition is not None and hasattr(self, "player"):
             size = self._physical_size()
@@ -144,9 +161,8 @@ class D3D11Surface(QWidget):
                 self.host.clearMask()
             else:
                 self.host.setMask(mask)
-        video = (self._first_frame_ready and getattr(self, "has_video", False)
-                 and not region.isEmpty())
-        self.host.setVisible(not self._first_frame_ready or video)
+        video = not preroll and getattr(self, "has_video", False) and not region.isEmpty()
+        self.host.setVisible(preroll or video)
         if video and (self.crop_enabled or self._draft is not None):
             self.layer.setGeometry(QRect(origin, self.size()))
             self.layer.show()
