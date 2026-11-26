@@ -853,8 +853,11 @@ class MainWindow(QMainWindow):
         kind = event.type()
         if kind == QEvent.Type.Resize and obj is getattr(self, "_central", None):
             self._place_overlay()
-        if kind == QEvent.Type.Resize and obj is self.video and self._update_button is not None:
-            self._place_update_button()
+        if kind == QEvent.Type.Resize and obj is self.video:
+            if self._update_button is not None:
+                self._place_update_button()
+            if getattr(self, "_ui_ready", False) and self.toast.isVisible():
+                self.toast.reposition()
         in_window = isinstance(obj, QWidget) and obj.window() is self
         if (self._jkl is not None or self._jkl_tap is not None) \
                 and kind == QEvent.Type.WindowDeactivate and obj is self:
@@ -1471,11 +1474,20 @@ class MainWindow(QMainWindow):
             self._error("Could not open video", str(exc))
             return
         self._open_info(path, info)
-        startup_log.mark("UI filled for the file")
 
     def _open_info(self, path: Path, info: MediaInfo, keep: dict | None = None) -> None:
+        if USE_D3D11:
+            self.video.prepare_file_replacement(
+                lambda image: self._apply_open_info(path, info, keep, image))
+        else:
+            self._apply_open_info(path, info, keep)
+
+    def _apply_open_info(self, path: Path, info: MediaInfo, keep: dict | None,
+                         replacement_image: QImage | None = None) -> bool:
         """Load a probed file or sequence. `keep` (T36 fps change) restores trim, crop and
         the frame instead of the clean state."""
+        if self.worker is not None:
+            return False
         sequence = info.sequence
         if sequence is not None:
             path = sequence.first_file if keep is None else path
@@ -1515,7 +1527,8 @@ class MainWindow(QMainWindow):
                         autoplay=autoplay,                                 # T35
                         frame_duration=info.frame_duration,
                         sequence_fps=info.fps if sequence is not None else None,
-                        decoder=decoder_options(info))                     # E4
+                        decoder=decoder_options(info),                      # E4
+                        replacement_image=replacement_image)
         startup_log.mark("video.load returned")
         if keep is None:
             start_format = self.config.start_format()                      # T25
@@ -1543,6 +1556,8 @@ class MainWindow(QMainWindow):
         elif sequence is not None and sequence.missing():
             self.toast.show_message(f"Missing frames: {format_ranges(sequence.missing())}",
                                     action=False, ms=6000)
+        startup_log.mark("UI filled for the file")
+        return True
 
     def set_audio(self, track: AudioTrack | None) -> None:
         self.audio = track
@@ -3385,11 +3400,6 @@ class MainWindow(QMainWindow):
     def _error(self, title: str, text: str) -> None:
         box = QMessageBox(QMessageBox.Icon.NoIcon, title, text, QMessageBox.StandardButton.Ok, self)
         box.exec()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if getattr(self, "_ui_ready", False) and self.toast.isVisible():
-            self.toast.reposition()
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():

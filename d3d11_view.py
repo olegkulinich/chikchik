@@ -3,8 +3,8 @@ import ctypes
 import os
 from ctypes import wintypes
 
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPalette, QRegion
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QRegion
 from PySide6.QtWidgets import QWidget
 
 import startup_log
@@ -23,12 +23,18 @@ class CropLayer(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setClipRegion(self.view.exposed)
-        self.view._paint_crop(painter)
+        if self.view._replacement_image is not None:
+            self.view._paint_replacement(painter)
+        elif self.view.crop_enabled or self.view._draft is not None:
+            self.view._paint_crop(painter)
         painter.end()
 
 
 class D3D11Surface(QWidget):
     surface_ready = Signal()
+    _replacement_ready = Signal(object)
+    _replacement_paused = Signal(object)
+    _replacement_captured = Signal(object, object)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -70,7 +76,17 @@ class D3D11Surface(QWidget):
         self._ready = False
         self._closing = False
         self._first_frame_ready = False
+        self._replacement_token = None
+        self._replacement_capture = None
+        self._replacement_image = None
+        self._reveal_timer = QTimer(self)
+        self._reveal_timer.setSingleShot(True)
+        self._reveal_timer.timeout.connect(self._release_replacement_image)
+        self._replacement_paused.connect(self._capture_paused_frame, Qt.QueuedConnection)
+        self._replacement_captured.connect(self._finish_capture, Qt.QueuedConnection)
+        self._replacement_ready.connect(self._finish_replacement, Qt.QueuedConnection)
         self._composition_needs_attach = self.composition is not None
+        self._missing_swapchain_logged = False
         self._seek_done.connect(self._show_rendered_surface, Qt.QueuedConnection)
 
     def _show_rendered_surface(self):
@@ -79,13 +95,132 @@ class D3D11Surface(QWidget):
         if self._composition_needs_attach:
             self._composition_needs_attach = False
             swapchain = getattr(self.player, "display_swapchain", None)
-            if swapchain:
-                self.composition.set_swapchain(swapchain)
-            else:
+            if not swapchain:
                 self._composition_needs_attach = True
+                if not self._missing_swapchain_logged:
+                    import logging
+
+                    self._missing_swapchain_logged = True
+                    message = "DirectComposition: mpv did not expose a display swap chain"
+                    startup_log.mark(message)
+                    logging.getLogger(__name__).warning(message)
+                return
+            self.composition.set_swapchain(swapchain)
         if not self._first_frame_ready:
             self._first_frame_ready = True
             self.sync_surface()
+
+    def prepare_file_replacement(self, open_file):
+        """Deliver a snapshot of the outgoing viewport without waiting on mpv in Qt."""
+        pending = self._replacement_capture
+        was_playing = pending[2] if pending is not None else self.playing
+        request = object()
+        self._replacement_capture = (request, open_file, was_playing)
+        if self._replacement_image is not None:
+            self._finish_capture(request, self._replacement_image)
+            return
+        if not (self._first_frame_ready and self.has_video and self._scale is not None
+                and self.isVisible() and not self.owner.isMinimized()):
+            self._finish_capture(request, None)
+            return
+
+        def paused(error, _data):  # mpv event thread
+            if error:
+                self._replacement_captured.emit(request, None)
+            else:
+                self._replacement_paused.emit(request)
+
+        try:
+            self.player.command_async("set", "pause", "yes", callback=paused)
+        except Exception:
+            self._finish_capture(request, None)
+        else:
+            # A missing acknowledgement or screenshot must not block the open.
+            QTimer.singleShot(120, self, lambda: self._finish_capture(request, None))
+
+    def _capture_paused_frame(self, request):
+        # Let the last queued presents reach the visible HWND before copying it.
+        QTimer.singleShot(self._two_refreshes_ms(), self, lambda: self._capture_frame(request))
+
+    def _capture_frame(self, request):
+        pending = self._replacement_capture
+        if self._closing or pending is None or request is not pending[0]:
+            return
+
+        def captured(error, data):  # mpv event thread
+            self._replacement_captured.emit(request, None if error else data)
+
+        try:
+            self.player.command_async("screenshot-raw", "window", callback=captured)
+        except Exception:
+            self._finish_capture(request, None)
+
+    def _finish_capture(self, request, data):
+        pending = self._replacement_capture
+        if self._closing or pending is None or request is not pending[0]:
+            return
+        _, open_file, was_playing = pending
+        self._replacement_capture = None
+        image = data if isinstance(data, QImage) else None
+        if isinstance(data, dict) and data.get("format") == "bgr0":
+            try:
+                # bgr0 has an unused high byte. Copy only the color channels so
+                # the translucent crop layer composites the snapshot as opaque.
+                raw = QImage(data["data"], data["w"], data["h"], data["stride"],
+                             QImage.Format_RGB32)
+                image = raw.convertToFormat(QImage.Format_RGB888)
+            except (KeyError, TypeError, ValueError):
+                pass
+            if image is not None and image.isNull():
+                image = None
+        if open_file(image) is False and was_playing:
+            self._set("pause", False)
+
+    def begin_replacement(self, image):
+        self._reveal_timer.stop()
+        self._replacement_token = object()
+        self._replacement_image = image
+        self.sync_surface()
+        if image is not None:
+            self.layer.raise_()
+            self.layer.repaint()
+        else:
+            self.repaint()
+        theme.dwm_flush()
+        return self._replacement_token
+
+    def _finish_replacement(self, token):
+        if self._closing or token is not self._replacement_token:
+            return
+        # The HWND stays mapped under the snapshot throughout the transition.
+        # Wait for the incoming frame to reach DWM, then remove the cover once.
+        self._reveal_timer.start(self._two_refreshes_ms())
+
+    def _two_refreshes_ms(self):
+        refresh_rate = self.screen().refreshRate() or 60.0
+        return round(2000 / refresh_rate)
+
+    def _release_replacement_image(self):
+        self._replacement_token = None
+        had_image = self._replacement_image is not None
+        self._replacement_image = None
+        if had_image:
+            # A hidden layered HWND keeps its submitted bitmap. Paint out
+            # the snapshot before hiding so a later show cannot replay it.
+            if self.layer.isVisible():
+                self.layer.repaint()
+            else:
+                # A minimized window cannot repaint until it is shown again.
+                self.layer.destroy()
+        self.sync_surface()
+        self.update()
+
+    def _paint_replacement(self, painter):
+        painter.fillRect(self.rect(), QColor(theme.VIDEO_BG))
+        size = self._replacement_image.size().scaled(self.size(), Qt.KeepAspectRatio)
+        target = QRect(QPoint(), size)
+        target.moveCenter(self.rect().center())
+        painter.drawImage(target, self._replacement_image)
 
     def _physical_size(self):
         dpr = self.devicePixelRatioF()
@@ -123,12 +258,16 @@ class D3D11Surface(QWidget):
             if control.isVisible():
                 corner = control.mapToGlobal(QPoint()) - origin
                 region -= QRegion(QRect(corner, control.size()))
-        # Keep the native child mapped at its real size during preroll. A
-        # hidden QWidget can leave mpv rendering into its initial 100x30 HWND.
-        # The parent clips this child until the first frame is ready.
+        # Keep the native child mapped at its real size during preroll.
+        # During a captured replacement the overlay covers it without moving it.
+        # If capture failed, clip it past the edge of its actual native parent.
+        frozen = self._replacement_image is not None
+        preroll = not self._first_frame_ready or (
+            self._replacement_token is not None and not frozen)
         geometry = self.rect()
-        if not self._first_frame_ready:
-            geometry.moveLeft(-geometry.width())
+        if preroll:
+            left_margin = max(0, self.mapTo(self.owner, QPoint()).x())
+            geometry.moveLeft(-geometry.width() - left_margin)
         if self.composition is not None and hasattr(self, "player"):
             size = self._physical_size()
             if size != self._output_size:
@@ -144,11 +283,12 @@ class D3D11Surface(QWidget):
                 self.host.clearMask()
             else:
                 self.host.setMask(mask)
-        video = (self._first_frame_ready and getattr(self, "has_video", False)
-                 and not region.isEmpty())
-        self.host.setVisible(not self._first_frame_ready or video)
-        if video and (self.crop_enabled or self._draft is not None):
-            self.layer.setGeometry(QRect(origin, self.size()))
+        video = not preroll and getattr(self, "has_video", False) and not region.isEmpty()
+        self.host.setVisible(preroll or video)
+        if video and (frozen or self.crop_enabled or self._draft is not None):
+            geometry = QRect(origin, self.size())
+            if self.layer.geometry() != geometry:
+                self.layer.setGeometry(geometry)
             self.layer.show()
             self.layer.update()
         else:
