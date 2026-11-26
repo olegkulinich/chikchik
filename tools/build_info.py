@@ -47,8 +47,8 @@ def build_line() -> str:
         pushed = commit and ref_value(f"refs/remotes/origin/{branch}") == commit
     else:
         branch, commit, pushed = "detached", head, True
-        if os.environ.get("GITHUB_REF_TYPE") == "tag":       # CI tag build: "v1.0.0 · abc1234"
-            branch = os.environ.get("GITHUB_REF_NAME") or branch
+        if os.environ.get("GITHUB_REF_TYPE") == "tag":
+            branch = ""  # Settings already shows the release version.
     modified = not pushed
     git = git_command()
     if git:
