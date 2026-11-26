@@ -2732,7 +2732,9 @@ class MainWindow(QMainWindow):
                     and reveal.widget.isAncestorOf(focus)
                 want = reveal.zone().contains(pos) or editing or (popup and reveal.shown)
             if want != reveal.shown:
-                reveal.set_shown(want, animate=not want)
+                # D3D11 clips video under visible controls, so fading would expose
+                # the window background until the controls are fully hidden.
+                reveal.set_shown(want, animate=not want and not USE_D3D11)
                 if want:
                     self._place_overlay()
         self._update_cursor(global_pos, held)
