@@ -322,13 +322,12 @@ class _Reveal:
 
 
 class _TitleStrip(QWidget):
-    """T27 Hide UI: the title bar, shown on hover over the top edge. On Windows the
-    strip is the native caption (WM_NCHITTEST) — snap, double-click maximize."""
+    """Title bar shown on hover in fullscreen and in windowed Hide UI."""
 
     HEIGHT = 32
     BUTTON_W = 46
 
-    def __init__(self, window: QMainWindow, parent: QWidget):
+    def __init__(self, window: MainWindow, parent: QWidget):
         super().__init__(parent)
         self.window_ = window
         self.setObjectName("TitleStrip")
@@ -366,22 +365,30 @@ class _TitleStrip(QWidget):
 
     def _toggle_maximized(self) -> None:
         w = self.window_
-        w.showNormal() if w.isMaximized() else w.showMaximized()
+        if w.isFullScreen():
+            w.toggle_fullscreen()
+        elif w.isMaximized():
+            w.showNormal()
+        else:
+            w.showMaximized()
 
     def sync(self) -> None:
-        """Maximize ↔ restore glyph."""
-        maximized = self.window_.isMaximized()
+        """Use the restore glyph when the middle button leaves fullscreen."""
+        fullscreen = self.window_.isFullScreen()
+        restore = fullscreen or self.window_.isMaximized()
+        self.buttons[1].setToolTip("Exit Fullscreen" if fullscreen else "")
         if self._glyph_font:
-            self.buttons[1].setText("\uE923" if maximized else "\uE922")
+            self.buttons[1].setText("\uE923" if restore else "\uE922")
         else:
-            self.buttons[1].setText("❐" if maximized else "□")
+            self.buttons[1].setText("❐" if restore else "□")
 
     def over_button(self, local: QPoint) -> bool:
         return any(b.geometry().contains(local) for b in self.buttons)
 
     # Elsewhere than Windows the strip isn't a native caption — move/maximize by hand.
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.window_.windowHandle():
+        if event.button() == Qt.MouseButton.LeftButton and not self.window_.isFullScreen() \
+                and self.window_.windowHandle():
             self.window_.windowHandle().startSystemMove()
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -2657,13 +2664,12 @@ class MainWindow(QMainWindow):
                 self._show_cursor()
         if not self._fullscreen:
             self.setMinimumHeight(self.MIN_HEIGHT[mode])
-        # the hover title strip: Hide UI in a window only
-        strip = mode == "hidden" and not self._fullscreen
-        if not strip:
+        title_overlay = self._fullscreen or mode == "hidden"
+        if not title_overlay:
             self._title_reveal.set_shown(False, animate=False)
-        self._title_reveal.active = strip
+        self._title_reveal.active = title_overlay
         self._panels_reveal.active = overlay
-        frame_hidden = strip
+        frame_hidden = mode == "hidden" and not self._fullscreen
         if frame_hidden != self._frame_hidden:
             self._frame_hidden = frame_hidden
             win_frame.refresh(self, frame_hidden)
@@ -2740,7 +2746,8 @@ class MainWindow(QMainWindow):
             self._show_cursor()
             return
         if (self._fullscreen and not self._cursor_hidden and not held
-                and not self._panels_reveal.shown and QApplication.activePopupWidget() is None
+                and not self._panels_reveal.shown and not self._title_reveal.shown
+                and QApplication.activePopupWidget() is None
                 and not self._popover_open()
                 and self.isActiveWindow()
                 and now - self._cursor_still_since >= self.CURSOR_HIDE_S):
