@@ -1,4 +1,4 @@
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 APP_NAME = "ChikChik!"   # shown to people; files/folders use "ChikChik" (no "!": special in cmd/bat)
 
 try:
