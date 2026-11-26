@@ -216,9 +216,13 @@ def main() -> int:
         if USE_D3D11:
             import shiboken6
             player = window.video.player
-            window.video.close_composition()
-            shiboken6.delete(app)
-            player.terminate()
+            try:
+                window.video.close_composition()
+            finally:
+                try:
+                    shiboken6.delete(app)
+                finally:
+                    player.terminate()
 
 
 if __name__ == "__main__":
