@@ -791,7 +791,7 @@ class MainWindow(QMainWindow):
             field.left.connect(lambda: self.video.setFocus())
 
         startup_log.mark("UI: central widget set")
-        central.toast_anchor = lambda: self.video.geometry()
+        central.toast_anchor = self._toast_anchor
         self.toast = Toast(central, native_overlay=USE_D3D11)
         self.toast.action_clicked.connect(self._show_in_folder)
         self._toast_path: Path | None = None
@@ -2690,7 +2690,17 @@ class MainWindow(QMainWindow):
             self.panels.raise_()
         self.title_strip.setGeometry(0, 0, central.width(), self.title_strip.HEIGHT)
         self.title_strip.raise_()
+        if self.toast.isVisible():
+            self.toast.reposition()
         self.toast.raise_()
+
+    def _toast_anchor(self) -> QRect:
+        area = self.video.geometry()
+        if self._fullscreen:
+            # Reserve the control panel's full height even when it is hidden.
+            panel_top = self._central.height() - self.panels.sizeHint().height()
+            area.setBottom(min(area.bottom(), panel_top - 1))
+        return area
 
     CURSOR_HIDE_S = 1.5      # fullscreen: hide a still cursor
 
