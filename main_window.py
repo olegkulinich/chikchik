@@ -132,7 +132,8 @@ class MenuRow(QWidget):
     def __init__(self, menu: QMenu, text: str, hint: str = "", enabled: bool = True,
                  checked: bool = False, callback=None, check_column: bool = False,
                  cells: list[tuple[str, int, str, int]] | None = None,
-                 sub: str = "", submenu: bool = False, root: QMenu | None = None):
+                 sub: str = "", submenu: bool = False, root: QMenu | None = None,
+                 remove_callback=None):
         """`cells` replaces the right side: (text, fixed width, color or "", gap before).
         `sub` — dim text right after the label (Open Recent: the folder).
         `submenu` — the row opens a submenu (▸, a click doesn't close the menu).
@@ -190,6 +191,13 @@ class MenuRow(QWidget):
             if check_column:
                 check.setFixedWidth(10)
             right.addWidget(check)
+        if remove_callback is not None:
+            remove = button("×", tooltip="Remove from Open Recent")
+            remove.setObjectName("RecentRemove")
+            remove.setAccessibleName(f"Remove {text} from Open Recent")
+            remove.setFixedSize(20, 20)
+            remove.clicked.connect(remove_callback)
+            right.addWidget(remove)
         layout.addLayout(right)
 
     # Highlight = the menu's "hot" row, set by a cursor poll (_MenuHover): Qt's hover,
@@ -1361,14 +1369,34 @@ class MainWindow(QMainWindow):
 
     def _recent_menu(self, root: QMenu) -> QMenu:
         sub = self._new_menu()
-        metrics = QFontMetrics(self.font())
-        for i, path in enumerate(self._recent()):
-            folder = metrics.elidedText(str(path.parent), Qt.TextElideMode.ElideMiddle, 260)
-            action = QWidgetAction(sub)
-            action.setDefaultWidget(MenuRow(
-                sub, path.name, display_key(MENU_SHORTCUTS["open_recent"][1]) if i == 0 else "",
-                callback=lambda p=path: self.open_recent(p), sub=folder, root=root))
-            sub.addAction(action)
+
+        def remove(path: Path) -> None:
+            self.config.remove_recent(str(path))
+            sub._hover._set(None)
+            sub.clear()
+            if self._recent():
+                populate()
+            else:
+                sub.close()
+                root.close()
+
+        def queue_remove(path: Path) -> None:
+            # Rebuild after the click finishes, since clear() deletes its button.
+            QTimer.singleShot(0, sub, lambda: remove(path))
+
+        def populate() -> None:
+            metrics = QFontMetrics(self.font())
+            shortcut = display_key(MENU_SHORTCUTS["open_recent"][1])
+            for i, path in enumerate(self._recent()):
+                folder = metrics.elidedText(str(path.parent), Qt.TextElideMode.ElideMiddle, 260)
+                action = QWidgetAction(sub)
+                action.setDefaultWidget(MenuRow(
+                    sub, path.name, shortcut if i == 0 else "",
+                    callback=lambda p=path: self.open_recent(p), sub=folder, root=root,
+                    remove_callback=lambda _checked, p=path: queue_remove(p)))
+                sub.addAction(action)
+
+        populate()
         return sub
 
     def open_recent(self, path: Path | None = None) -> None:
