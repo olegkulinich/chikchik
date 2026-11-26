@@ -202,7 +202,16 @@ class D3D11Surface(QWidget):
 
     def _release_replacement_image(self):
         self._replacement_token = None
+        had_image = self._replacement_image is not None
         self._replacement_image = None
+        if had_image:
+            # A hidden layered HWND keeps its submitted bitmap. Paint out
+            # the snapshot before hiding so a later show cannot replay it.
+            if self.layer.isVisible():
+                self.layer.repaint()
+            else:
+                # A minimized window cannot repaint until it is shown again.
+                self.layer.destroy()
         self.sync_surface()
         self.update()
 
