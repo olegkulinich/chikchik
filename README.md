@@ -43,7 +43,7 @@ Right-click anywhere in the viewer to find commands and open **Hotkeys**.
 
 ## Install
 
-1. Download `ChikChik-1.0.0-Setup.exe` from the [latest release](https://github.com/olegkulinich/chikchik/releases/latest).
+1. Download the Windows installer (`.exe`) from the [latest release](https://github.com/olegkulinich/chikchik/releases/latest).
 2. Run the installer. Windows SmartScreen may show a warning because the installer is unsigned. The release includes a `.sha256` file you can use to verify the download.
 
 ChikChik checks GitHub for updates once a day by default. You can turn off automatic checks or check manually in **Settings → Updates**.
