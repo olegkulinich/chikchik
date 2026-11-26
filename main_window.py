@@ -1483,11 +1483,11 @@ class MainWindow(QMainWindow):
             self._apply_open_info(path, info, keep)
 
     def _apply_open_info(self, path: Path, info: MediaInfo, keep: dict | None,
-                         replacement_image: QImage | None = None) -> None:
+                         replacement_image: QImage | None = None) -> bool:
         """Load a probed file or sequence. `keep` (T36 fps change) restores trim, crop and
         the frame instead of the clean state."""
         if self.worker is not None:
-            return
+            return False
         sequence = info.sequence
         if sequence is not None:
             path = sequence.first_file if keep is None else path
@@ -1557,6 +1557,7 @@ class MainWindow(QMainWindow):
             self.toast.show_message(f"Missing frames: {format_ranges(sequence.missing())}",
                                     action=False, ms=6000)
         startup_log.mark("UI filled for the file")
+        return True
 
     def set_audio(self, track: AudioTrack | None) -> None:
         self.audio = track
