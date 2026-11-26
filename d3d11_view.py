@@ -181,27 +181,27 @@ class D3D11Surface(QWidget):
         self._replacement_token = object()
         self._replacement_image = image
         self.sync_surface()
-        self.repaint()
         if image is not None:
+            self.layer.raise_()
             self.layer.repaint()
+        else:
+            self.repaint()
         theme.dwm_flush()
         return self._replacement_token
 
     def _finish_replacement(self, token):
         if self._closing or token is not self._replacement_token:
             return
-        self._replacement_token = None
-        self.sync_surface()
-        if self._replacement_image is not None:
-            # Keep the snapshot above the HWND while DWM maps the new video.
-            # Allow two refreshes for the HWND and the swap chain to become visible.
-            self._reveal_timer.start(self._two_refreshes_ms())
+        # The HWND stays mapped under the snapshot throughout the transition.
+        # Wait for the incoming frame to reach DWM, then remove the cover once.
+        self._reveal_timer.start(self._two_refreshes_ms())
 
     def _two_refreshes_ms(self):
         refresh_rate = self.screen().refreshRate() or 60.0
         return round(2000 / refresh_rate)
 
     def _release_replacement_image(self):
+        self._replacement_token = None
         self._replacement_image = None
         self.sync_surface()
         self.update()
@@ -249,12 +249,16 @@ class D3D11Surface(QWidget):
             if control.isVisible():
                 corner = control.mapToGlobal(QPoint()) - origin
                 region -= QRegion(QRect(corner, control.size()))
-        # Keep the native child mapped at its real size during preroll. A
-        # hidden QWidget can leave mpv rendering into its initial 100x30 HWND.
-        preroll = not self._first_frame_ready
+        # Keep the native child mapped at its real size during preroll.
+        # During a captured replacement the overlay covers it without moving it.
+        # If capture failed, clip it past the edge of its actual native parent.
+        frozen = self._replacement_image is not None
+        preroll = not self._first_frame_ready or (
+            self._replacement_token is not None and not frozen)
         geometry = self.rect()
         if preroll:
-            geometry.moveLeft(-geometry.width())
+            left_margin = max(0, self.mapTo(self.owner, QPoint()).x())
+            geometry.moveLeft(-geometry.width() - left_margin)
         if self.composition is not None and hasattr(self, "player"):
             size = self._physical_size()
             if size != self._output_size:
@@ -270,11 +274,9 @@ class D3D11Surface(QWidget):
                 self.host.clearMask()
             else:
                 self.host.setMask(mask)
-        video = (not preroll and self._replacement_token is None
-                 and getattr(self, "has_video", False) and not region.isEmpty())
+        video = not preroll and getattr(self, "has_video", False) and not region.isEmpty()
         self.host.setVisible(preroll or video)
-        frozen = self._replacement_image is not None and not region.isEmpty()
-        if frozen or (video and (self.crop_enabled or self._draft is not None)):
+        if video and (frozen or self.crop_enabled or self._draft is not None):
             geometry = QRect(origin, self.size())
             if self.layer.geometry() != geometry:
                 self.layer.setGeometry(geometry)
@@ -295,9 +297,7 @@ class D3D11Surface(QWidget):
         self.sync_surface()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(theme.VIDEO_BG))
-        if self._replacement_image is not None:
-            self._paint_replacement(painter)
-        elif not self.has_video:
+        if not self.has_video:
             painter.setPen(QColor(theme.DIM))
             painter.drawText(self.rect(), Qt.AlignCenter, self.empty_text)
         painter.end()
