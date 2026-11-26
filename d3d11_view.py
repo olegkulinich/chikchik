@@ -25,13 +25,15 @@ class CropLayer(QWidget):
         painter.setClipRegion(self.view.exposed)
         if self.view._replacement_image is not None:
             self.view._paint_replacement(painter)
-        self.view._paint_crop(painter)
+        elif self.view.crop_enabled or self.view._draft is not None:
+            self.view._paint_crop(painter)
         painter.end()
 
 
 class D3D11Surface(QWidget):
     surface_ready = Signal()
     _replacement_ready = Signal(object)
+    _replacement_paused = Signal(object)
     _replacement_captured = Signal(object, object)
 
     def __init__(self, parent):
@@ -80,6 +82,7 @@ class D3D11Surface(QWidget):
         self._reveal_timer = QTimer(self)
         self._reveal_timer.setSingleShot(True)
         self._reveal_timer.timeout.connect(self._release_replacement_image)
+        self._replacement_paused.connect(self._capture_paused_frame, Qt.QueuedConnection)
         self._replacement_captured.connect(self._finish_capture, Qt.QueuedConnection)
         self._replacement_ready.connect(self._finish_replacement, Qt.QueuedConnection)
         self._composition_needs_attach = self.composition is not None
@@ -109,17 +112,40 @@ class D3D11Surface(QWidget):
 
     def prepare_file_replacement(self, open_file):
         """Deliver a snapshot of the outgoing viewport without waiting on mpv in Qt."""
-        self._replacement_capture = None
+        pending = self._replacement_capture
+        was_playing = pending[2] if pending is not None else self.playing
+        request = object()
+        self._replacement_capture = (request, open_file, was_playing)
         if self._replacement_image is not None:
-            open_file(self._replacement_image)
+            self._finish_capture(request, self._replacement_image)
             return
         if not (self._first_frame_ready and self.has_video and self._scale is not None
                 and self.isVisible() and not self.owner.isMinimized()):
-            open_file(None)
+            self._finish_capture(request, None)
             return
 
-        request = object()
-        self._replacement_capture = (request, open_file)
+        def paused(error, _data):  # mpv event thread
+            if error:
+                self._replacement_captured.emit(request, None)
+            else:
+                self._replacement_paused.emit(request)
+
+        try:
+            self.player.command_async("set", "pause", "yes", callback=paused)
+        except Exception:
+            self._finish_capture(request, None)
+        else:
+            # A missing acknowledgement or screenshot must not block the open.
+            QTimer.singleShot(120, self, lambda: self._finish_capture(request, None))
+
+    def _capture_paused_frame(self, request):
+        # Let the last queued presents reach the visible HWND before copying it.
+        QTimer.singleShot(self._two_refreshes_ms(), self, lambda: self._capture_frame(request))
+
+    def _capture_frame(self, request):
+        pending = self._replacement_capture
+        if self._closing or pending is None or request is not pending[0]:
+            return
 
         def captured(error, data):  # mpv event thread
             self._replacement_captured.emit(request, None if error else data)
@@ -128,17 +154,14 @@ class D3D11Surface(QWidget):
             self.player.command_async("screenshot-raw", "window", callback=captured)
         except Exception:
             self._finish_capture(request, None)
-        else:
-            # Loading can still proceed if a driver stalls or mpv never replies.
-            QTimer.singleShot(120, self, lambda: self._finish_capture(request, None))
 
     def _finish_capture(self, request, data):
         pending = self._replacement_capture
         if self._closing or pending is None or request is not pending[0]:
             return
-        _, open_file = pending
+        _, open_file, was_playing = pending
         self._replacement_capture = None
-        image = None
+        image = data if isinstance(data, QImage) else None
         if isinstance(data, dict) and data.get("format") == "bgr0":
             try:
                 # bgr0 has an unused high byte. Copy only the color channels so
@@ -150,7 +173,8 @@ class D3D11Surface(QWidget):
                 pass
             if image is not None and image.isNull():
                 image = None
-        open_file(image)
+        if open_file(image) is False and was_playing:
+            self._set("pause", False)
 
     def begin_replacement(self, image):
         self._reveal_timer.stop()
@@ -171,8 +195,11 @@ class D3D11Surface(QWidget):
         if self._replacement_image is not None:
             # Keep the snapshot above the HWND while DWM maps the new video.
             # Allow two refreshes for the HWND and the swap chain to become visible.
-            refresh_rate = self.screen().refreshRate() or 60.0
-            self._reveal_timer.start(round(2000 / refresh_rate))
+            self._reveal_timer.start(self._two_refreshes_ms())
+
+    def _two_refreshes_ms(self):
+        refresh_rate = self.screen().refreshRate() or 60.0
+        return round(2000 / refresh_rate)
 
     def _release_replacement_image(self):
         self._replacement_image = None
