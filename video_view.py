@@ -145,9 +145,9 @@ class VideoView(VideoSurface):
         self.player.register_event_callback(self._on_event)
         # Seek queue, latest wins: one seek in flight, the next goes when mpv reports
         # playback-restart — adapts to how fast the file seeks.
-        self._in_flight: tuple[float, bool] | None = None
+        self._in_flight: tuple[float | None, bool] | None = None
         self._sent_at = 0.0
-        self._pending: tuple[float, bool] | None = None
+        self._pending: tuple[float | None, bool] | None = None
         self._landed: tuple[float, bool] | None = None   # T115: last seek that finished
         self._resume_after = False         # T115: unpause once the queue is empty
 
@@ -713,6 +713,9 @@ class VideoView(VideoSurface):
             if perf_log.ENABLED:
                 perf_log.log("seek   skip (same target)")
             return
+        self._queue_seek(target)
+
+    def _queue_seek(self, target: tuple[float | None, bool]) -> None:
         # Safety valve: if a restart event got lost, don't wait forever.
         if self._in_flight is not None and time.monotonic() - self._sent_at < 1.5:
             self._pending = target
@@ -739,15 +742,17 @@ class VideoView(VideoSurface):
         """A seek is running or queued — mpv's time-pos is stale until it lands."""
         return self._in_flight is not None or self._pending is not None
 
-    def _send_seek(self, target: tuple[float, bool]) -> None:
+    def _send_seek(self, target: tuple[float | None, bool]) -> None:
         position, exact = target
         self._in_flight = target
         self._sent_at = time.monotonic()
+        if position is None:
+            amount, mode = "0", "relative+exact"
+        else:
+            amount = f"{position:.6f}"
+            mode = "absolute+exact" if exact else "absolute+keyframes"
         try:
-            self.player.command_async(
-                "seek", f"{position:.6f}", "absolute+exact" if exact else "absolute+keyframes",
-                callback=self._seek_reply,
-            )
+            self.player.command_async("seek", amount, mode, callback=self._seek_reply)
         except Exception:
             self._in_flight = None
 
@@ -761,13 +766,19 @@ class VideoView(VideoSurface):
             perf_log.log(f"seek   {kind:5} {(time.monotonic() - self._sent_at) * 1000:7.1f} ms"
                          f"{'  (+pending)' if self._pending else ''}")
         if self._in_flight is not None:
-            self._landed = self._in_flight
+            position, exact = self._in_flight
+            self._landed = (position, exact) if position is not None else None
         self._in_flight = None
         if self._pending is not None:
             target, self._pending = self._pending, None
             self._send_seek(target)
         elif self._resume_after:
             self._resume_queued()
+
+    def resume_after_shuttle(self) -> None:
+        """Resync at mpv's paused position and resume after the seek settles."""
+        self._queue_seek((None, True))
+        self.resume_after_seek()
 
     def resume_after_seek(self) -> None:
         """T115: unpause once the seek queue is empty — one clean audio start from the
