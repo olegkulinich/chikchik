@@ -52,7 +52,7 @@ ChikChik checks GitHub for updates once a day by default. You can turn off autom
 
 On Windows, install 64-bit Python 3.14 and Inno Setup 6. Place `libmpv-2.dll` and `LICENSE.LGPL` from the linked libmpv LGPL build in the repository root. Copy `ffmpeg.exe`, `ffprobe.exe`, and `LICENSE` from the linked FFmpeg essentials build into `ffmpeg/`. See [THIRD-PARTY.txt](THIRD-PARTY.txt) for both downloads.
 
-Run `build.bat` to create the installer in `dist/`. The [GitHub Actions workflow](.github/workflows/build.yml) pins the versions and shows how the release build is assembled.
+Run `build.bat` to create the installer in `dist/`. Windows packaging files are in [`packaging/windows/`](packaging/windows/), and app icons and fonts are in [`assets/`](assets/). The [GitHub Actions workflow](.github/workflows/build.yml) pins the versions and shows how the release build is assembled.
 
 ## License
 

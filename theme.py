@@ -44,15 +44,17 @@ FONT_FAMILY = "Inter"
 EMOJI_FAMILY = "Segoe UI Emoji" if sys.platform == "win32" else "Noto Color Emoji"
 
 
-def base_dir() -> Path:
-    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+def asset_path(source_path: str, bundled_path: str | None = None) -> Path:
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / (bundled_path or source_path)
+    return Path(__file__).resolve().parent / "assets" / source_path
 
 
 def load_fonts(app: QApplication) -> None:
     global FONT_FAMILY
     families: list[str] = []
     for name in ("Inter-Regular.otf", "Inter-Medium.otf"):
-        font_id = QFontDatabase.addApplicationFont(str(base_dir() / "fonts" / name))
+        font_id = QFontDatabase.addApplicationFont(str(asset_path(f"fonts/{name}")))
         if font_id >= 0:
             families += QFontDatabase.applicationFontFamilies(font_id)
     FONT_FAMILY = families[0] if families else "Segoe UI"
@@ -64,7 +66,7 @@ def load_fonts(app: QApplication) -> None:
 
 def app_icon() -> QIcon:
     """T30: Fluent Emoji 3D ✂️ (icon.ico, all sizes); the emoji font as a fallback."""
-    path = base_dir() / "icon.ico"
+    path = asset_path("icons/icon.ico", "icon.ico")
     if path.exists():
         icon = QIcon(str(path))
         if not icon.isNull():

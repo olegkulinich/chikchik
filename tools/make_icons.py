@@ -1,4 +1,4 @@
-"""T30: build icon.ico (app, ✂️) and icons/gif.ico (✌️) from the Fluent Emoji 3D PNGs.
+"""T30: build icon.ico (app, ✂️) and gif.ico (✌️) in assets/icons from the Fluent Emoji 3D PNGs.
 
 Dev-only (needs Pillow); the .ico files are committed, the build doesn't run this.
     python tools/make_icons.py
@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
+ICONS = ROOT / "assets" / "icons"
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
 
@@ -31,5 +32,5 @@ def write_ico(source: Path, target: Path) -> None:
 
 
 if __name__ == "__main__":
-    write_ico(ROOT / "icons" / "scissors_3d.png", ROOT / "icon.ico")
-    write_ico(ROOT / "icons" / "victory_hand_3d.png", ROOT / "icons" / "gif.ico")
+    write_ico(ICONS / "scissors_3d.png", ICONS / "icon.ico")
+    write_ico(ICONS / "victory_hand_3d.png", ICONS / "gif.ico")

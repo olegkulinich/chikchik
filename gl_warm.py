@@ -12,7 +12,7 @@ Hidden switch QTC_GL_WARM (Windows only):
     (default since E2 build 2 bench: native window ~290 → ~195 ms; level 1 ~220)
 
 No Qt imports: app.py starts this before PySide6 — in the frozen app already from
-`pyi_rth_chikchik.py` (F build 4), before PyInstaller's own hooks load QtCore.
+`packaging/windows/pyi_rth_chikchik.py` (F build 4), before PyInstaller's own hooks load QtCore.
 """
 from __future__ import annotations
 

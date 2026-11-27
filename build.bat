@@ -72,13 +72,13 @@ python -m PyInstaller ^
     --windowed ^
     --onedir ^
     --noupx ^
-    --runtime-hook pyi_rth_chikchik.py ^
+    --runtime-hook packaging\windows\pyi_rth_chikchik.py ^
     --exclude-module multiprocessing ^
     --exclude-module pkgutil ^
     --name ChikChik ^
-    --add-data "fonts;fonts" ^
-    --add-data "icon.ico;." ^
-    --icon icon.ico ^
+    --add-data "assets\fonts;fonts" ^
+    --add-data "assets\icons\icon.ico;." ^
+    --icon assets\icons\icon.ico ^
     app.py
 if errorlevel 1 goto error
 
@@ -91,7 +91,7 @@ xcopy /e /i /y /q "ffmpeg" "%OUT%\ffmpeg" >nul
 if errorlevel 1 goto error
 if exist "%OUT%\ffmpeg\ffplay.exe" del /q "%OUT%\ffmpeg\ffplay.exe"
 rem T30: icon of the "ChikChik! -> GIF" Explorer item, next to the exe
-copy /y "icons\gif.ico" "%OUT%\gif.ico" >nul
+copy /y "assets\icons\gif.ico" "%OUT%\gif.ico" >nul
 if errorlevel 1 goto error
 
 echo.
@@ -119,7 +119,7 @@ if not defined ISCC (
 
 echo.
 echo Building installer (compression takes a minute or two)...
-"%ISCC%" /Qp /DAppVersion=%VERSION% installer.iss
+"%ISCC%" /Qp /DAppVersion=%VERSION% packaging\windows\installer.iss
 if errorlevel 1 goto error
 echo Installer: %CD%\dist\ChikChik-%VERSION%-Setup.exe
 
