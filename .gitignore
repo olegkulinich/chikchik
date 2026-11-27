@@ -10,7 +10,7 @@ dist/
 *.spec
 
 # branch · commit for the Settings line, written by build.bat
-/build_info.py
+/chikchik/build_info.py
 
 # Third-party binaries — downloaded for the build, shipped via Releases
 *.exe

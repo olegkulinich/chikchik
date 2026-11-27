@@ -19,9 +19,9 @@ from __future__ import annotations
 import os
 import sys
 import threading
-from video_backend import USE_D3D11
+from .video_backend import USE_D3D11
 
-import startup_log
+from . import startup_log
 
 _value = os.environ.get("QTC_GL_WARM", "").strip()
 LEVEL = int(_value) if _value.isdigit() else 2

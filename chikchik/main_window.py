@@ -41,14 +41,14 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-import perf_log
-import startup_log
-from version import APP_NAME
-import theme
-import timecode
-import updates
-import win_frame
-from backend import (
+from . import perf_log
+from . import startup_log
+from .version import APP_NAME
+from . import theme
+from . import timecode
+from . import updates
+from . import win_frame
+from .backend import (
     find_sequence,
     format_ranges,
     is_image,
@@ -84,13 +84,13 @@ from backend import (
     unique_path,
     validate_video,
 )
-from config import (ESC_KEY, FORMAT_HOTKEYS, MENU_ALIASES, MENU_SHORTCUTS, SCALE_HOTKEYS, Config,
+from .config import (ESC_KEY, FORMAT_HOTKEYS, MENU_ALIASES, MENU_SHORTCUTS, SCALE_HOTKEYS, Config,
                     display_key)
-from popovers import HotkeysPopover, SettingsPopover
-from updates import UpdateChecker
-from video_view import VideoView
-from video_backend import USE_D3D11
-from widgets import (
+from .popovers import HotkeysPopover, SettingsPopover
+from .updates import UpdateChecker
+from .video_view import VideoView
+from .video_backend import USE_D3D11
+from .widgets import (
     FieldGroup,
     _FieldEdit,
     Field,

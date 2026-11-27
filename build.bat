@@ -57,7 +57,7 @@ python -m pip install -r requirements-build.txt
 if errorlevel 1 goto error
 
 :pyenv_ready
-for /f %%v in ('python -c "from version import VERSION; print(VERSION)"') do set VERSION=%%v
+for /f %%v in ('python -c "from chikchik.version import VERSION; print(VERSION)"') do set VERSION=%%v
 
 python tools\build_info.py
 if errorlevel 1 goto error

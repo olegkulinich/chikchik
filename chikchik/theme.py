@@ -47,7 +47,7 @@ EMOJI_FAMILY = "Segoe UI Emoji" if sys.platform == "win32" else "Noto Color Emoj
 def asset_path(source_path: str, bundled_path: str | None = None) -> Path:
     if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / (bundled_path or source_path)
-    return Path(__file__).resolve().parent / "assets" / source_path
+    return Path(__file__).resolve().parent.parent / "assets" / source_path
 
 
 def load_fonts(app: QApplication) -> None:

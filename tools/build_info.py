@@ -1,4 +1,4 @@
-"""Writes build_info.py for the Settings line: "ChikChik! 0.9.0 · group5-prores · 07ad572".
+"""Writes chikchik/build_info.py for the Settings line: "ChikChik! 0.9.0 · group5-prores · 07ad572".
 
 Run by build.bat. Reads .git directly (git isn't on PATH with GitHub Desktop); the git
 command, if found, only adds the "modified" check for uncommitted changes.
@@ -65,7 +65,7 @@ def build_line() -> str:
 
 if __name__ == "__main__":
     line = build_line()
-    (ROOT / "build_info.py").write_text(
+    (ROOT / "chikchik" / "build_info.py").write_text(
         "# Written by tools/build_info.py during build.bat — not in git.\n"
         f"BUILD = {line!r}\n", encoding="utf-8")
     sys.stdout.reconfigure(errors="replace")          # cmd code page may lack "·"

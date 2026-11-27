@@ -6,13 +6,13 @@ from PySide6.QtGui import QDesktopServices, QKeyEvent
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-import context_menu
-import theme
-import updates
-import win_frame
-from config import ESC_KEY, HOTKEY_ACTIONS, MENU_SHORTCUTS, Config, display_key
-from version import APP_NAME, BUILD, VERSION
-from widgets import CheckBox, Popover, Segmented, button, dim_label, portable_combo
+from . import context_menu
+from . import theme
+from . import updates
+from . import win_frame
+from .config import ESC_KEY, HOTKEY_ACTIONS, MENU_SHORTCUTS, Config, display_key
+from .version import APP_NAME, BUILD, VERSION
+from .widgets import CheckBox, Popover, Segmented, button, dim_label, portable_combo
 
 
 class SettingsPopover(Popover):
