@@ -38,14 +38,16 @@ def _program() -> tuple[str, Path]:
 
 
 def _icon(item: str) -> str:
-    prefix, folder = _program()
+    _, folder = _program()
+    frozen = getattr(sys, "frozen", False)
+    icons = folder / "icons" if frozen else folder / "assets" / "icons"
     if item == "gif":
-        for candidate in (folder / "gif.ico", folder / "icons" / "gif.ico"):
+        for candidate in (folder / "gif.ico", icons / "gif.ico"):
             if candidate.exists():
                 return str(candidate)
-    if getattr(sys, "frozen", False):
+    if frozen:
         return f"{sys.executable},0"
-    return str(BASE_DIR / "icon.ico")
+    return str(icons / "icon.ico")
 
 
 def is_installed(item: str) -> bool:

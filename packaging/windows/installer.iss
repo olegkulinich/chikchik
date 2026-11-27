@@ -1,5 +1,5 @@
 ﻿; ChikChik! installer (Inno Setup 6). Built by build.bat:
-;   ISCC /DAppVersion=x.y installer.iss
+;   ISCC /DAppVersion=x.y packaging\windows\installer.iss
 ; Per-user install, no admin rights: %LOCALAPPDATA%\Programs\ChikChik
 ; Formerly QuickTrimCrop: same AppId, so it updates the old install in place and
 ; removes the old folder, Start menu shortcut and "Open with" entry.
@@ -31,9 +31,9 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-OutputDir=dist
+OutputDir=..\..\dist
 OutputBaseFilename={#AppTech}-{#AppVersion}-Setup
-SetupIconFile=icon.ico
+SetupIconFile=..\..\assets\icons\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 Compression=lzma2/ultra64
@@ -52,14 +52,14 @@ Type: filesandordirs; Name: "{autopf}\{#OldName}"
 Type: files; Name: "{autoprograms}\{#OldName}.lnk"
 
 [Files]
-Source: "dist\{#AppTech}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "THIRD-PARTY.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "LICENSE"; DestDir: "{app}\licenses"; DestName: "ChikChik-GPL-3.0.txt"; Flags: ignoreversion
-Source: "LICENSE.LGPL-3.0"; DestDir: "{app}\licenses"; DestName: "Qt-LGPL-3.0.txt"; Flags: ignoreversion
-Source: "LICENSE.LGPL"; DestDir: "{app}\licenses"; DestName: "mpv-LICENSE.LGPL"; Flags: ignoreversion
-Source: "ffmpeg\LICENSE"; DestDir: "{app}\licenses"; DestName: "FFmpeg-LICENSE.txt"; Flags: ignoreversion
-Source: "fonts\LICENSE-Inter.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "icons\LICENSE-FluentEmoji.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\..\dist\{#AppTech}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\THIRD-PARTY.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\..\LICENSE"; DestDir: "{app}\licenses"; DestName: "ChikChik-GPL-3.0.txt"; Flags: ignoreversion
+Source: "..\..\LICENSE.LGPL-3.0"; DestDir: "{app}\licenses"; DestName: "Qt-LGPL-3.0.txt"; Flags: ignoreversion
+Source: "..\..\LICENSE.LGPL"; DestDir: "{app}\licenses"; DestName: "mpv-LICENSE.LGPL"; Flags: ignoreversion
+Source: "..\..\ffmpeg\LICENSE"; DestDir: "{app}\licenses"; DestName: "FFmpeg-LICENSE.txt"; Flags: ignoreversion
+Source: "..\..\assets\fonts\LICENSE-Inter.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\..\assets\icons\LICENSE-FluentEmoji.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Tasks]
 ; First install only (Check: IsFirstInstall) — on updates the choice lives in
