@@ -9,17 +9,17 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QOpenGLContext, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication
-from video_backend import USE_D3D11
+from .video_backend import USE_D3D11
 
 if USE_D3D11:
-    from d3d11_view import D3D11Surface as VideoSurface
+    from .d3d11_view import D3D11Surface as VideoSurface
 else:
     from PySide6.QtOpenGLWidgets import QOpenGLWidget as VideoSurface
 
-import perf_log
-import startup_log
-import theme
-from widgets import _is_pen
+from . import perf_log
+from . import startup_log
+from . import theme
+from .widgets import _is_pen
 
 
 def _gl_renderer() -> str:
@@ -102,7 +102,7 @@ class VideoView(VideoSurface):
             options.update(gpu_dumb_mode="yes", hwdec="no")
         # E2 (55g): extra mpv options for experiments without a new build, e.g.
         # QTC_MPV_OPTS="audio-stream-silence=yes audio-buffer=0.1"
-        from backend import mpv_opts_env
+        from .backend import mpv_opts_env
 
         extra = mpv_opts_env()
         options.update(extra)

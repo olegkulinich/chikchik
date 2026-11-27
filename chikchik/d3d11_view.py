@@ -7,9 +7,9 @@ from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QRegion
 from PySide6.QtWidgets import QWidget
 
-import startup_log
-import theme
-from win_composition import CompositionTarget
+from . import startup_log
+from . import theme
+from .win_composition import CompositionTarget
 
 
 class CropLayer(QWidget):

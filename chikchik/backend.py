@@ -291,7 +291,7 @@ def _bundle_dirs() -> list[Path]:
         bundle = getattr(sys, "_MEIPASS", None)
         if bundle:
             dirs.append(Path(bundle))
-    dirs.append(Path(__file__).resolve().parent)
+    dirs.append(Path(__file__).resolve().parent.parent)
     return dirs
 
 
@@ -1129,7 +1129,7 @@ class Probe:
         self._thread.start()
 
     def _run(self) -> None:
-        import startup_log
+        from . import startup_log
 
         try:
             if is_image(self.path):

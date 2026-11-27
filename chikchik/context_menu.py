@@ -1,7 +1,7 @@
 """T30: the Explorer right-click items "ChikChik!" and "ChikChik! → GIF" (HKCU, no admin).
 
 Used by Settings → Explorer Menu (applied at once) and from the command line in dev:
-    python context_menu.py install | uninstall
+    python -m chikchik.context_menu install | uninstall
 The installer adds both on the first install, leaves the user's choice alone on updates
 and removes them on uninstall.
 """
@@ -15,7 +15,7 @@ ENABLED = os.name == "nt"
 if ENABLED:
     import winreg
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 EXTENSIONS = (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".mts", ".ts")
 ROOT = r"Software\Classes\SystemFileAssociations"
 # id → (registry key, title, extra argument). The old key names stay: existing installs
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     if not ENABLED:
         raise SystemExit("Windows only")
     if len(sys.argv) != 2 or sys.argv[1] not in ("install", "uninstall"):
-        raise SystemExit("Usage:\n  python context_menu.py install\n  python context_menu.py uninstall")
+        raise SystemExit("Usage:\n  python -m chikchik.context_menu install\n  python -m chikchik.context_menu uninstall")
     for name in ITEMS:
         set_installed(name, sys.argv[1] == "install")
     print("Done:", sys.argv[1], " ".join(EXTENSIONS))

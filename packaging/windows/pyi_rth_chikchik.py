@@ -12,9 +12,9 @@ import os
 
 if os.environ.get("QTC_EARLY_WARM", "").strip() != "0":
     os.environ.setdefault("QT_OPENGL", "desktop")   # same default as app.py
-    import startup_log
+    from chikchik import startup_log
 
     startup_log.mark("boot: runtime hook (early warm)")
-    import gl_warm
+    from chikchik import gl_warm
 
     gl_warm.start()

@@ -18,7 +18,7 @@ import threading
 
 from PySide6.QtCore import QObject, Signal
 
-from version import VERSION
+from .version import VERSION
 
 REPO = "olegkulinich/chikchik"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"

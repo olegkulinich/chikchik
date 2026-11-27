@@ -34,13 +34,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-lock.txt
 
-      - name: Tag matches version.py
+      - name: Tag matches chikchik/version.py
         if: github.ref_type == 'tag'
         shell: pwsh
         run: |
-          $ver = python -c "from version import VERSION; print(VERSION)"
+          $ver = python -c "from chikchik.version import VERSION; print(VERSION)"
           if ("v$ver" -ne "${{ github.ref_name }}") {
-            Write-Error "Tag ${{ github.ref_name }} does not match version.py ($ver)"; exit 1
+            Write-Error "Tag ${{ github.ref_name }} does not match chikchik/version.py ($ver)"; exit 1
           }
 
       - name: Python packages (pinned)
@@ -94,7 +94,7 @@ jobs:
           $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
           "$h  $($f.Name)" | Out-File -Encoding ascii "$($f.FullName).sha256"
           "name=$($f.Name)" >> $env:GITHUB_OUTPUT
-          "### $($f.Name)`n`nSHA256: ``$h```n`nBuild line: ``$((Get-Content build_info.py | Select-String 'BUILD =').Line)``" >> $env:GITHUB_STEP_SUMMARY
+          "### $($f.Name)`n`nSHA256: ``$h```n`nBuild line: ``$((Get-Content chikchik/build_info.py | Select-String 'BUILD =').Line)``" >> $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
         with:

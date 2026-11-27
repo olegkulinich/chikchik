@@ -23,9 +23,9 @@ import time
 
 from PySide6.QtGui import QCursor, QFont, QFontDatabase, QInputDevice, QPointingDevice
 
-import perf_log
-import theme
-import timecode
+from . import perf_log
+from . import theme
+from . import timecode
 
 
 def button(text: str = "", checkable: bool = False, tooltip: str = "") -> QPushButton:

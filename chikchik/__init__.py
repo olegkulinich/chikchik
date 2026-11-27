@@ -1,0 +1,1 @@
+"""ChikChik application package."""
